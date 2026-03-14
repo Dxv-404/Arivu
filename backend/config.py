@@ -1,149 +1,137 @@
 """
-config.py — Single source of truth for all environment variables.
+backend/config.py
 
-Load order:
-  1. conftest.py (tests) or app.py caller loads .env via python-dotenv BEFORE
-     any module is imported.
-  2. Config.__init__() reads from os.environ and hard-exits on missing required vars.
+Application configuration. All values from environment variables.
+Required vars raise RuntimeError at startup. Optional vars degrade gracefully.
 
-Never call os.environ directly outside this module.
-Import the singleton: from backend.config import config
+Usage (Phase 4 style):    from backend.config import Config; Config.S2_API_KEY
+Usage (Phase 1/2/3 style): from backend.config import config; config.S2_API_KEY
+Both work — config = Config alias at bottom makes them identical.
 """
 import os
-import sys
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def _require(name: str) -> str:
-    """Read a required env var. Exits process with an error if not set."""
-    val = os.environ.get(name, "").strip()
-    if not val:
-        print(
-            f"FATAL: Required environment variable '{name}' is not set.\n"
-            "Copy .env.example to .env and fill it in.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return val
-
-
-def _optional(name: str, default: str = "") -> str:
-    return os.environ.get(name, default).strip()
-
-
-def _int(name: str, default: int) -> int:
-    """Read an integer env var. Returns default on parse failure."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        return default
-
-
-def _bool(name: str, default: bool = False) -> bool:
-    return os.environ.get(name, str(default)).lower() in ("true", "1", "yes")
-
-
 class Config:
-    """
-    Application configuration. Instantiated once at module import time.
-    Hard-exits immediately on missing required variables.
-    """
+    # ── Flask ─────────────────────────────────────────────────────
+    SECRET_KEY          = os.environ.get("FLASK_SECRET_KEY", "dev-insecure-change-in-prod")
+    DEBUG               = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
 
-    def __init__(self):
-        # -- Flask ------------------------------------------------------------
-        self.SECRET_KEY: str = _require("FLASK_SECRET_KEY")
-        self.DEBUG: bool     = _bool("FLASK_DEBUG", False)
-        self.ENV: str        = _optional("FLASK_ENV", "production")
+    # ── Database ──────────────────────────────────────────────────
+    DATABASE_URL        = os.environ.get("DATABASE_URL", "")
 
-        # -- Database ---------------------------------------------------------
-        self.DATABASE_URL: str = _require("DATABASE_URL")
-        self.DB_POOL_MIN: int  = _int("DB_POOL_MIN", 2)
-        # Neon free tier cap = 10 connections total.
-        # With --workers 1 in Procfile, pool of 8 is safe (leaves 2 for scripts).
-        # If you scale to --workers 2, set DB_POOL_MAX=4 or upgrade Neon plan.
-        self.DB_POOL_MAX: int  = _int("DB_POOL_MAX", 8)
+    # ── DB Pool (sized for --workers 2 on Neon free tier) ─────────
+    # Neon free cap = 10 connections.
+    # With --workers 2: DB_POOL_MAX=4 → 2×4=8 active + 2 for scripts = 10 ✅
+    # If you change --workers, adjust DB_POOL_MAX accordingly.
+    DB_POOL_MIN         = int(os.environ.get("DB_POOL_MIN", "1"))
+    DB_POOL_MAX         = int(os.environ.get("DB_POOL_MAX", "4"))
 
-        # -- External APIs ----------------------------------------------------
-        self.S2_API_KEY:      str = _optional("S2_API_KEY")
-        self.OPENALEX_EMAIL:  str = _optional("OPENALEX_EMAIL")
-        self.GROQ_API_KEY:    str = _optional("GROQ_API_KEY")
-        self.CORE_API_KEY:    str = _optional("CORE_API_KEY")
-        self.PUBPEER_API_KEY: str = _optional("PUBPEER_API_KEY")
-        self.CROSSREF_MAILTO: str = _optional("CROSSREF_MAILTO")
+    # ── External APIs ─────────────────────────────────────────────
+    S2_API_KEY          = os.environ.get("S2_API_KEY", "")
+    OPENALEX_EMAIL      = os.environ.get("OPENALEX_EMAIL", "")
+    CROSSREF_MAILTO     = os.environ.get("CROSSREF_MAILTO", "")
+    GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "")
+    CORE_API_KEY        = os.environ.get("CORE_API_KEY", "")
+    PUBPEER_API_KEY     = os.environ.get("PUBPEER_API_KEY", "")
 
-        # Groq model names (spec §4.4)
-        self.GROQ_FAST_MODEL:  str = _optional("GROQ_FAST_MODEL",  "llama-3.1-8b-instant")
-        self.GROQ_SMART_MODEL: str = _optional("GROQ_SMART_MODEL", "llama-3.3-70b-versatile")
+    # Groq model names
+    GROQ_FAST_MODEL     = os.environ.get("GROQ_FAST_MODEL",  "llama-3.1-8b-instant")
+    GROQ_SMART_MODEL    = os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile")
 
-        # -- Cloudflare R2 ----------------------------------------------------
-        self.R2_ACCOUNT_ID:        str = _optional("R2_ACCOUNT_ID")
-        self.R2_ACCESS_KEY_ID:     str = _optional("R2_ACCESS_KEY_ID")
-        self.R2_SECRET_ACCESS_KEY: str = _optional("R2_SECRET_ACCESS_KEY")
-        self.R2_BUCKET_NAME:       str = _optional("R2_BUCKET_NAME", "arivu-graphs")
-        self.R2_ENDPOINT_URL:      str = _optional("R2_ENDPOINT_URL")
+    # ── Cloudflare R2 ─────────────────────────────────────────────
+    # Phase 4 canonical name: "arivu-data"
+    # Phase 1 defaulted to "arivu-graphs" — set R2_BUCKET_NAME in env if already created.
+    R2_ACCOUNT_ID       = os.environ.get("R2_ACCOUNT_ID", "")
+    R2_ACCESS_KEY_ID    = os.environ.get("R2_ACCESS_KEY_ID", "")
+    R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+    R2_BUCKET_NAME      = os.environ.get("R2_BUCKET_NAME", "arivu-data")
+    R2_ENDPOINT_URL     = os.environ.get("R2_ENDPOINT_URL", "")
 
-        # -- NLP Worker -------------------------------------------------------
-        # NLP_WORKER_SECRET: shared secret validated by the NLP worker on every
-        # request via "Authorization: Bearer {NLP_WORKER_SECRET}" header.
-        # Must match the value in HuggingFace Spaces secrets.
-        self.NLP_WORKER_URL:    str = _optional("NLP_WORKER_URL", "http://localhost:7860")
-        self.NLP_WORKER_SECRET: str = _optional("NLP_WORKER_SECRET")
+    # ── NLP Worker ────────────────────────────────────────────────
+    NLP_WORKER_URL      = os.environ.get("NLP_WORKER_URL", "http://localhost:7860")
+    # Renamed from NLP_WORKER_SECRET in Phase 4. nlp_worker/app.py supports both names.
+    WORKER_SECRET       = (os.environ.get("WORKER_SECRET", "")
+                           or os.environ.get("NLP_WORKER_SECRET", ""))
+    # Backward compat alias for Phase 1/2/3 code that uses config.NLP_WORKER_SECRET
+    NLP_WORKER_SECRET   = WORKER_SECRET
+    # Increased from Phase 1's 30s — HF Spaces cold starts can take 60-90s.
+    NLP_WORKER_TIMEOUT  = int(os.environ.get("NLP_WORKER_TIMEOUT", "90"))
 
-        # -- Auth -------------------------------------------------------------
-        self.HCAPTCHA_SITE_KEY:   str = _optional("HCAPTCHA_SITE_KEY")
-        self.HCAPTCHA_SECRET_KEY: str = _optional("HCAPTCHA_SECRET_KEY")
+    # ── NLP Pipeline Tuning ───────────────────────────────────────
+    NLP_SIMILARITY_THRESHOLD = float(os.environ.get("NLP_SIMILARITY_THRESHOLD", "0.25"))
+    NLP_BATCH_SIZE      = int(os.environ.get("NLP_BATCH_SIZE", "5"))
 
-        # -- Email / Payments / Monitoring ------------------------------------
-        self.RESEND_API_KEY:        str = _optional("RESEND_API_KEY")
-        self.STRIPE_SECRET_KEY:     str = _optional("STRIPE_SECRET_KEY")
-        self.STRIPE_WEBHOOK_SECRET: str = _optional("STRIPE_WEBHOOK_SECRET")
-        self.SENTRY_DSN:            str = _optional("SENTRY_DSN")
+    # ── Graph Building ────────────────────────────────────────────
+    MAX_GRAPH_DEPTH     = int(os.environ.get("MAX_GRAPH_DEPTH", "2"))
+    MAX_REFS_PER_PAPER  = int(os.environ.get("MAX_REFS_PER_PAPER", "50"))
+    MAX_GRAPH_SIZE      = int(os.environ.get("MAX_GRAPH_SIZE", "600"))
+    GRAPH_CACHE_TTL_DAYS = int(os.environ.get("GRAPH_CACHE_TTL_DAYS", "7"))
 
-        # -- Translation ------------------------------------------------------
-        self.LIBRETRANSLATE_URL: str = _optional(
-            "LIBRETRANSLATE_URL", "https://libretranslate.com"
-        )
-        self.LIBRETRANSLATE_KEY: str = _optional("LIBRETRANSLATE_KEY")
+    # ── Deployment ────────────────────────────────────────────────
+    # Set AFTER first Koyeb deploy — used for CORS allow-list.
+    # Value: hostname only, no https://. Example: my-app-abc123.koyeb.app
+    KOYEB_PUBLIC_DOMAIN = os.environ.get("KOYEB_PUBLIC_DOMAIN", "")
 
-        # -- NLP pipeline tuning ----------------------------------------------
-        self.NLP_SIMILARITY_THRESHOLD: float = float(
-            _optional("NLP_SIMILARITY_THRESHOLD", "0.25")
-        )
-        self.NLP_BATCH_SIZE:     int = _int("NLP_BATCH_SIZE", 5)
-        self.NLP_WORKER_TIMEOUT: int = _int("NLP_WORKER_TIMEOUT", 30)
+    # ── Error Tracking ────────────────────────────────────────────
+    SENTRY_DSN          = os.environ.get("SENTRY_DSN", "")
 
-        # -- Graph building ---------------------------------------------------
-        self.MAX_GRAPH_DEPTH:    int = _int("MAX_GRAPH_DEPTH", 2)
-        self.MAX_REFS_PER_PAPER: int = _int("MAX_REFS_PER_PAPER", 50)
-        self.MAX_GRAPH_SIZE:     int = _int("MAX_GRAPH_SIZE", 600)
-        self.GRAPH_CACHE_TTL_DAYS: int = _int("GRAPH_CACHE_TTL_DAYS", 7)
+    # ── Feature Flags ─────────────────────────────────────────────
+    # Auth is NOT implemented in Phase 4. Leave this false.
+    ENABLE_AUTH         = os.environ.get("ENABLE_AUTH", "false").lower() == "true"
 
-    # -- Derived feature flags (read-only properties) -------------------------
+    # ── Auth / hCaptcha (Phase 6+) ────────────────────────────────
+    HCAPTCHA_SITE_KEY   = os.environ.get("HCAPTCHA_SITE_KEY", "")
+    HCAPTCHA_SECRET_KEY = os.environ.get("HCAPTCHA_SECRET_KEY", "")
 
-    @property
-    def GROQ_ENABLED(self) -> bool:
-        return bool(self.GROQ_API_KEY)
+    # ── Email / Payments / Monitoring (Phase 6+) ──────────────────
+    RESEND_API_KEY      = os.environ.get("RESEND_API_KEY", "")
+    STRIPE_SECRET_KEY   = os.environ.get("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
-    @property
-    def R2_ENABLED(self) -> bool:
-        return bool(
-            self.R2_ACCOUNT_ID
-            and self.R2_ACCESS_KEY_ID
-            and self.R2_SECRET_ACCESS_KEY
-        )
+    # ── Translation ───────────────────────────────────────────────
+    LIBRETRANSLATE_URL  = os.environ.get("LIBRETRANSLATE_URL", "https://libretranslate.com")
+    LIBRETRANSLATE_KEY  = os.environ.get("LIBRETRANSLATE_KEY", "")
+
+    # ── Derived properties ────────────────────────────────────────
+    @classmethod
+    def R2_ENABLED(cls) -> bool:
+        return bool(cls.R2_ACCOUNT_ID and cls.R2_ACCESS_KEY_ID and cls.R2_SECRET_ACCESS_KEY)
+
+    @classmethod
+    def GROQ_ENABLED(cls) -> bool:
+        return bool(cls.GROQ_API_KEY)
 
     @property
     def NLP_WORKER_ENABLED(self) -> bool:
         return bool(self.NLP_WORKER_URL)
 
+    @classmethod
+    def validate(cls) -> None:
+        """Called at app startup. Raises if DATABASE_URL missing. Logs warnings for others."""
+        if not cls.DATABASE_URL:
+            raise RuntimeError(
+                "DATABASE_URL is required.\n"
+                "For Neon: postgresql://user:pass@host.neon.tech/arivu?sslmode=require"
+            )
+        recommended = {
+            "NLP_WORKER_URL":     "NLP features disabled — graph builds use abstract-only analysis",
+            "GROQ_API_KEY":       "LLM disabled — genealogy and cluster labels use templates",
+            "R2_ENDPOINT_URL":    "R2 disabled — graphs stored in DB only (limited capacity)",
+            "SENTRY_DSN":         "Error tracking disabled",
+            "S2_API_KEY":         "Using unauthenticated S2 API — lower rate limits",
+            "WORKER_SECRET":      "NLP worker unauthenticated — OK locally, insecure in prod",
+            "KOYEB_PUBLIC_DOMAIN": "CORS not configured for production domain — set after first deploy",
+        }
+        for var, msg in recommended.items():
+            if not getattr(cls, var, ""):
+                logger.warning(f"Config: {var} not set — {msg}")
 
-# Module-level singleton.
-# _require() fires inside __init__, so the process exits immediately at startup
-# if required vars are missing.
-# conftest.py must call load_dotenv() BEFORE this module is imported in tests.
-config = Config()
+
+# ── Backward-compatibility alias ──────────────────────────────────────────────
+# Phase 1/2/3 code imports: from backend.config import config (lowercase)
+# Phase 4 uses:             from backend.config import Config (uppercase class)
+# This alias makes both identical — config.SECRET_KEY == Config.SECRET_KEY
+config = Config

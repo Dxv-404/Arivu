@@ -186,6 +186,23 @@ class ArivuRateLimiter:
             self._windows[key].append(now)
             return True, headers
 
+    def check_sync(self, session_id: str, endpoint: str) -> tuple[bool, dict]:
+        """Synchronous wrapper around async check() for Flask route handlers."""
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(_asyncio.run, self.check(session_id, endpoint)).result()
+            return loop.run_until_complete(self.check(session_id, endpoint))
+        except Exception:
+            return True, {}  # fail-open on errors
+
+    def get_429_response(self, headers: dict) -> dict:
+        """Alias for get_429_body() — used by Phase 3+ routes."""
+        return self.get_429_body(headers)
+
     def get_429_body(self, headers: dict) -> dict:
         return {
             "error": "rate_limit_exceeded",

@@ -106,6 +106,14 @@ class GraphLoader {
       tv.hidden = !tv.hidden;
       if (!tv.hidden) this._populateTableView(graphData);
     });
+
+    // Initialise semantic zoom AFTER graph renders and node positions settle
+    if (window.SemanticZoomRenderer && window._arivuGraph && graphData.dna_profile?.clusters) {
+      window._arivuGraph._semanticZoom = new SemanticZoomRenderer(
+        window._arivuGraph,
+        graphData.dna_profile
+      );
+    }
   }
 
   _initChat(graphSummary) {

@@ -30,13 +30,20 @@ class R2Client:
     class never reads os.environ directly.
     """
 
-    def __init__(self, config):
+    def __init__(self, config=None):
         """
         Args:
-            config: the Config singleton from backend/config.py
+            config: the Config singleton from backend/config.py.
+                    If None, imports the global Config automatically.
         """
-        self._bucket = config.R2_BUCKET_NAME
-        self._enabled = config.R2_ENABLED
+        from backend.config import Config as _Config
+        _cfg = config or _Config
+        self._bucket = _cfg.R2_BUCKET_NAME
+        self._enabled = bool(
+            getattr(_cfg, 'R2_ACCOUNT_ID', '') and
+            getattr(_cfg, 'R2_ACCESS_KEY_ID', '') and
+            getattr(_cfg, 'R2_SECRET_ACCESS_KEY', '')
+        )
 
         if not self._enabled:
             logger.warning(
@@ -49,10 +56,11 @@ class R2Client:
         self._client = boto3.client(
             "s3",
             endpoint_url=(
-                f"https://{config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+                getattr(_cfg, 'R2_ENDPOINT_URL', '')
+                or f"https://{_cfg.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
             ),
-            aws_access_key_id=config.R2_ACCESS_KEY_ID,
-            aws_secret_access_key=config.R2_SECRET_ACCESS_KEY,
+            aws_access_key_id=_cfg.R2_ACCESS_KEY_ID,
+            aws_secret_access_key=_cfg.R2_SECRET_ACCESS_KEY,
             region_name="auto",
         )
         logger.info(f"R2Client initialized — bucket: {self._bucket}")
@@ -137,3 +145,17 @@ class R2Client:
         if raw is None:
             return None
         return raw.decode("utf-8")
+
+    # ─── Phase 4 backport §0.6 — method aliases ──────────────────────────────
+
+    def download_json(self, key: str):
+        return self.get_json(key)
+
+    def upload_json(self, key: str, data: dict):
+        self.put_json(key, data)
+
+    def download(self, key: str):
+        return self.get(key)
+
+    def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
+        self.put(key, data, content_type)

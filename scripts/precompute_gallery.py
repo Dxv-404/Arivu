@@ -65,10 +65,10 @@ def precompute_paper(slug: str, paper_id: str, r2: R2Client,
         existing = r2.get_json(f"precomputed/{slug}/graph.json")
         return existing.get('metadata', {}) if existing else {}
 
-    # 1. Build graph
+    # 1. Build graph (Phase 4 backport §0.8: correct method name + signature)
     graph = AncestryGraph()
     start = time.time()
-    asyncio.run(graph.build(paper_id, max_depth=2, max_refs=50))
+    asyncio.run(graph.build_graph(paper_id))
     build_time = time.time() - start
     logger.info(f"  Graph built in {build_time:.1f}s: {len(graph.nodes)} nodes")
 
@@ -124,10 +124,11 @@ def precompute_paper(slug: str, paper_id: str, r2: R2Client,
     logger.info(f"  Mini SVG uploaded")
 
     # 11. Generate genealogy text (requires GROQ_API_KEY)
+    # Phase 4 backport §0.8: generate_genealogy_story() is sync, not async
     if config.GROQ_ENABLED:
         from backend.llm_client import ArivuLLMClient
         llm = ArivuLLMClient()
-        genealogy_result = asyncio.run(llm.generate_genealogy_story(graph_json))
+        genealogy_result = llm.generate_genealogy_story(graph_json)
         genealogy_text = genealogy_result.get('narrative', '') if isinstance(genealogy_result, dict) else str(genealogy_result)
         r2.put_text(f"precomputed/{slug}/genealogy.md", genealogy_text)
         logger.info(f"  Genealogy text uploaded")
@@ -139,6 +140,24 @@ def precompute_paper(slug: str, paper_id: str, r2: R2Client,
         'depth': 2,
         'build_time_seconds': round(build_time, 1)
     }
+
+    # Phase 4 backport §0.8: write stats back to gallery_index.json
+    import pathlib
+    _gallery_path = pathlib.Path("data/gallery_index.json")
+    if _gallery_path.exists():
+        try:
+            _gallery = json.loads(_gallery_path.read_text())
+            for _entry in _gallery:
+                if _entry.get("slug") == slug:
+                    _entry.setdefault("stats", {}).update({
+                        "papers": stats["papers"],
+                        "edges": stats["edges"],
+                    })
+            _gallery_path.write_text(json.dumps(_gallery, indent=2))
+            logger.info(f"  gallery_index.json updated for {slug}")
+        except Exception as e:
+            logger.warning(f"  Failed to update gallery_index.json: {e}")
+
     logger.info(f"  {slug} complete: {stats}")
     return stats
 

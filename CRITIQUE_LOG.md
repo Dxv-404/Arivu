@@ -259,3 +259,22 @@ Creating index.js separately would leave an unused stub and could cause import c
 
 ### Resolution
 User decision: Populate existing `landing-demo.js` with Phase 3 demo state machine code. Keep `landing-demo.js` as the canonical filename. Templates reference `landing-demo.js`. No `index.js` created.
+
+---
+
+## [2026-03-15] [PHASE 4] [CONFLICT] CONFLICT-005 — nlp_worker/requirements.txt version divergence
+
+**Type:** CONFLICT
+**Status:** RESOLVED
+**Affects:** nlp_worker/requirements.txt vs requirements-nlp-worker.txt
+**Severity:** MEDIUM
+
+### Finding
+Phase 1 and `requirements-nlp-worker.txt` specify: `fastapi==0.111.0`, `torch==2.2.2`, `scikit-learn==1.4.2`, plus `groq`, `httpx`, `python-dotenv`.
+Phase 4 §1.5 specifies `nlp_worker/requirements.txt` as: `fastapi==0.110.0`, `torch==2.2.1`, `scikit-learn==1.4.1`, `pydantic==2.6.3`, no `groq`/`httpx`/`python-dotenv`.
+
+### Impact
+After Phase 4, these two files intentionally diverge. The `nlp_worker/requirements.txt` is for HuggingFace Spaces deployment (minimal deps, lighter torch). The root `requirements-nlp-worker.txt` was only for local dev reference.
+
+### Resolution
+Following Phase 4 §1.5 spec (implementation authority per CLAUDE.md Part 0.2). Updated `nlp_worker/requirements.txt` to match Phase 4 spec. The NLP worker doesn't need groq/httpx/python-dotenv — those were only in the Phase 1 mirror file.

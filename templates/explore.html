@@ -114,3 +114,23 @@
   </div>
 </main>
 {% endblock %}
+
+{% block scripts %}
+<script>
+// Load real precomputed stats into gallery cards, replacing placeholder values
+fetch('/static/gallery_index.json')
+  .then(r => r.json())
+  .then(entries => {
+    entries.forEach(entry => {
+      const card = document.querySelector(`.gallery-entry[data-slug="${entry.slug}"]`);
+      if (!card || !entry.stats) return;
+      const p = card.querySelector('p');
+      if (p) {
+        const authors = (entry.authors || []).join(', ');
+        p.textContent = `${authors}, ${entry.year} · ${entry.stats.papers} papers`;
+      }
+    });
+  })
+  .catch(() => {}); // silently fall back to hardcoded placeholder values
+</script>
+{% endblock %}

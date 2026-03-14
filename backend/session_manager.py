@@ -20,6 +20,7 @@ import logging
 import os
 import secrets
 from functools import wraps
+from typing import Optional
 
 from flask import after_this_request, g, request
 
@@ -123,3 +124,15 @@ def require_session(f):
         g.session_id = _manager.require_session()
         return f(*args, **kwargs)
     return decorated
+
+
+def get_session_id(req) -> Optional[str]:
+    """
+    Read and validate session cookie. Returns session_id if valid, None otherwise.
+    Does NOT create a new session — use the @require_session decorator for that.
+    Used by routes that return 401 when no session is present.
+    """
+    existing = req.cookies.get(SESSION_COOKIE_NAME)
+    if not existing:
+        return None
+    return existing if _manager.get_session(existing) else None

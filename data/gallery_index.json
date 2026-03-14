@@ -1,0 +1,72 @@
+[
+  {
+    "slug": "attention",
+    "title": "Attention Is All You Need",
+    "authors": ["Vaswani", "Shazeer", "Parmar"],
+    "year": 2017,
+    "field": "Computer Science",
+    "paper_id": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+    "hook": "Remove this paper and 31% of transformer research collapses.",
+    "stats": { "papers": 152, "edges": 487, "fields": 2, "depth": 2 }
+  },
+  {
+    "slug": "alexnet",
+    "title": "ImageNet Classification with Deep CNNs",
+    "authors": ["Krizhevsky", "Sutskever", "Hinton"],
+    "year": 2012,
+    "field": "Computer Science",
+    "paper_id": "abd1c342495432171beb7ca8fd9551ef13cbd0ff",
+    "hook": "The paper that reignited deep learning — see its 10-year intellectual shadow.",
+    "stats": { "papers": 247, "edges": 612, "fields": 3, "depth": 2 }
+  },
+  {
+    "slug": "bert",
+    "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+    "authors": ["Devlin", "Chang", "Lee", "Toutanova"],
+    "year": 2018,
+    "field": "Computer Science",
+    "paper_id": "df2b0e26d0599ce3e70df8a9da02e51594e0e992",
+    "hook": "Where transformers, pre-training, and bidirectionality converged.",
+    "stats": { "papers": 312, "edges": 891, "fields": 4, "depth": 2 }
+  },
+  {
+    "slug": "gans",
+    "title": "Generative Adversarial Nets",
+    "authors": ["Goodfellow", "Pouget-Abadie"],
+    "year": 2014,
+    "field": "Computer Science",
+    "paper_id": "54e325aee6b2d476bbbb88615ac15e251c6e8214",
+    "hook": "Born from a bar argument. Became a research explosion.",
+    "stats": { "papers": 198, "edges": 534, "fields": 3, "depth": 2 }
+  },
+  {
+    "slug": "word2vec",
+    "title": "Efficient Estimation of Word Representations",
+    "authors": ["Mikolov", "Chen", "Corrado", "Dean"],
+    "year": 2013,
+    "field": "Computer Science",
+    "paper_id": "330da625c15427c6e42ccfa3b747fb29e5835bf0",
+    "hook": "The paper that made word vectors practical — and what it quietly revived.",
+    "stats": { "papers": 178, "edges": 467, "fields": 3, "depth": 2 }
+  },
+  {
+    "slug": "resnet",
+    "title": "Deep Residual Learning for Image Recognition",
+    "authors": ["He", "Zhang", "Ren", "Sun"],
+    "year": 2016,
+    "field": "Computer Science",
+    "paper_id": "2c03df8b48bf3fa39054345bafabfeff15bfd11d",
+    "hook": "Residual connections solved a 20-year problem. Trace the ancestry.",
+    "stats": { "papers": 289, "edges": 743, "fields": 2, "depth": 2 }
+  },
+  {
+    "slug": "gpt2",
+    "title": "Language Models are Unsupervised Multitask Learners",
+    "authors": ["Radford", "Wu", "Child"],
+    "year": 2019,
+    "field": "Computer Science",
+    "paper_id": "9405cc0d6169988371b2755e573cc28650d14dfe",
+    "hook": "The paper OpenAI almost didn't release. See what it was built on.",
+    "stats": { "papers": 267, "edges": 698, "fields": 3, "depth": 2 }
+  }
+]

@@ -393,6 +393,66 @@ CREATE TABLE IF NOT EXISTS insight_feedback (
     created_at   TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_insight_feedback_insight ON insight_feedback(insight_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Phase 4 backport §0.7: Fix insight_cache column name + insight_feedback schema
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- insight_cache: rename 'insights' column to 'insights_json' if old name exists
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='insight_cache' AND column_name='insights'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='insight_cache' AND column_name='insights_json'
+    ) THEN
+        ALTER TABLE insight_cache RENAME COLUMN insights TO insights_json;
+    END IF;
+END $$;
+
+-- Add index on insight_cache.paper_id if not exists
+CREATE INDEX IF NOT EXISTS idx_insight_cache_paper ON insight_cache(paper_id);
+
+-- insight_feedback: TEXT insight_id (no FK — client supplies arbitrary string IDs)
+-- Drop old version if it exists with wrong schema (INT FK to insights table)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='insight_feedback' AND column_name='insight_id'
+        AND data_type='integer'
+    ) THEN
+        DROP TABLE IF EXISTS insight_feedback CASCADE;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS insight_feedback (
+    id           SERIAL      PRIMARY KEY,
+    session_id   TEXT,
+    insight_id   TEXT        NOT NULL,
+    feedback     TEXT        NOT NULL CHECK(feedback IN ('helpful','not_helpful')),
+    timestamp    TIMESTAMP   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_insight_fb_insight ON insight_feedback(insight_id);
+
+-- genealogy_cache (should exist from Phase 1; ensure it does)
+CREATE TABLE IF NOT EXISTS genealogy_cache (
+    paper_id    TEXT        PRIMARY KEY,
+    story_json  JSONB,
+    computed_at TIMESTAMP   DEFAULT NOW()
+);
+
+-- session_graphs (should exist from Phase 1; ensure it does)
+CREATE TABLE IF NOT EXISTS session_graphs (
+    session_id  TEXT        NOT NULL,
+    graph_id    TEXT        NOT NULL,
+    created_at  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, graph_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sgs_session
+    ON session_graphs(session_id, created_at DESC);
 """
 
 

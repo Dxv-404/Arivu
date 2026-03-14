@@ -41,12 +41,16 @@ MODEL = SentenceTransformer("all-MiniLM-L6-v2")
 logger.info(f"Model loaded in {time.time() - _start:.1f}s")
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
-NLP_WORKER_SECRET = os.environ.get("NLP_WORKER_SECRET", "")
+# Phase 4 backport §0.9: supports both env var names and both header formats.
+WORKER_SECRET = (
+    os.environ.get("WORKER_SECRET", "")
+    or os.environ.get("NLP_WORKER_SECRET", "")
+)
 
 
 def require_auth(f):
     """
-    Decorator: validate Bearer token matches NLP_WORKER_SECRET.
+    Decorator: validate X-API-Key or Bearer token matches WORKER_SECRET.
 
     NOTE: FastAPI uses dependency injection (Depends) rather than decorators
     for request-level auth. This decorator is retained for documentation and
@@ -56,26 +60,32 @@ def require_auth(f):
     """
     @wraps(f)
     async def wrapper(request: Request, *args, **kwargs):
-        if NLP_WORKER_SECRET:
-            auth = request.headers.get("Authorization", "")
-            token = auth.removeprefix("Bearer ").strip()
-            if token != NLP_WORKER_SECRET:
-                raise HTTPException(status_code=401, detail="Invalid NLP worker secret")
+        if WORKER_SECRET:
+            token = request.headers.get("X-API-Key", "")
+            if not token:
+                auth = request.headers.get("Authorization", "")
+                token = auth.removeprefix("Bearer ").strip()
+            if token != WORKER_SECRET:
+                raise HTTPException(status_code=401, detail="Invalid worker secret")
         return await f(request, *args, **kwargs)
     return wrapper
 
 
 async def _auth_dependency(request: Request) -> None:
     """
-    FastAPI dependency: validate Bearer token.
+    FastAPI dependency: accept X-API-Key (Phase 4 canonical) or
+    Authorization: Bearer (Phase 2 legacy).
     Applied to all endpoints except /health via Depends(_auth_dependency).
-    Raises HTTP 401 if NLP_WORKER_SECRET is set and token does not match.
+    Raises HTTP 401 if WORKER_SECRET is set and token does not match.
     """
-    if NLP_WORKER_SECRET:
+    if not WORKER_SECRET:
+        return
+    token = request.headers.get("X-API-Key", "")
+    if not token:
         auth = request.headers.get("Authorization", "")
         token = auth.removeprefix("Bearer ").strip()
-        if token != NLP_WORKER_SECRET:
-            raise HTTPException(status_code=401, detail="Invalid NLP worker secret")
+    if token != WORKER_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
 
 
 # ─── Request / Response models ────────────────────────────────────────────────

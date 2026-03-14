@@ -7,6 +7,7 @@
 
 class ArivuGraph {
   constructor(container, graphData) {
+    this._semanticZoom = null;  // Phase 4 backport §0.10
     this.container = container;
     this.allNodes = graphData.nodes || [];
     this.allEdges = graphData.edges || [];

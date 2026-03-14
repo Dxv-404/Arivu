@@ -451,12 +451,10 @@ class TestAPIRoutes:
 
     @pytest.fixture
     def client(self):
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
         from app import create_app
-        app = create_app()
-        app.config['TESTING'] = True
-        with app.test_client() as c:
+        application = create_app()
+        application.config['TESTING'] = True
+        with application.test_client() as c:
             yield c
 
     def test_index_page_loads(self, client):

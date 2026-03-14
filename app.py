@@ -3,18 +3,19 @@ app.py — Arivu Flask application factory and routes.
 """
 import json
 import logging
+import os
 import time
 import uuid
 from threading import Thread
+from typing import Optional
 
-import structlog
-from flask import Flask, Response, g, jsonify, request, stream_with_context
+from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
+from flask_cors import CORS
 
-from flask import render_template
-
-from backend.config import config
+from backend.config import Config, config
+import backend.session_manager as session_manager
 from backend.session_manager import require_session
-from backend.rate_limiter import arivu_rate_limiter
+from backend.rate_limiter import arivu_rate_limiter as rate_limiter
 import backend.db as db
 from backend.utils import (
     await_sync, load_gallery_index, load_precomputed_graph, log_action,
@@ -28,105 +29,177 @@ from backend.llm_client import get_llm_client
 from backend.chat_guide import ChatGuide
 from backend.prompt_sanitizer import PromptSanitizer
 from backend.graph_engine import AncestryGraph
-from exceptions import register_error_handlers
-
-structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-)
+from exceptions import ArivuError, register_error_handlers
 
 logger = logging.getLogger(__name__)
 
+# Module-level Flask app — required for @app.route decorators and app.logger
+app = Flask(__name__)
+app.secret_key = Config.SECRET_KEY
 
-def _configure_cors(app: Flask) -> None:
-    """Configure CORS per spec §4.5."""
-    from flask_cors import CORS
-    if config.DEBUG:
-        CORS(
-            app,
-            origins=["http://localhost:3000", "http://localhost:5000"],
-            supports_credentials=True,
+
+# ── Sentry ────────────────────────────────────────────────────────────────────
+
+def _init_sentry(app) -> None:
+    """
+    Initialise Sentry. No-op if SENTRY_DSN is not configured.
+    PII scrubbing: never sends cookies, session IDs, or IP addresses to Sentry.
+    """
+    dsn = Config.SENTRY_DSN
+    if not dsn:
+        app.logger.info("Sentry DSN not set — error tracking disabled")
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+
+        def _scrub_pii(event, hint):
+            if "request" in event:
+                event["request"].get("headers", {}).pop("Cookie", None)
+                event["request"].get("headers", {}).pop("X-Session-ID", None)
+                event["request"].pop("env", None)
+            event.pop("user", None)
+            return event
+
+        sentry_sdk.init(
+            dsn=dsn,
+            integrations=[FlaskIntegration()],
+            traces_sample_rate=0.1,
+            profiles_sample_rate=0.05,
+            before_send=_scrub_pii,
+            ignore_errors=[KeyError, ValueError],
         )
+        app.logger.info("Sentry initialised")
+    except ImportError:
+        app.logger.warning("sentry-sdk not installed — add sentry-sdk[flask] to requirements.txt")
+
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+
+def _configure_cors(app) -> None:
+    """
+    CORS: allow the Koyeb auto-generated domain.
+
+    After first deploy, set KOYEB_PUBLIC_DOMAIN=your-app-xxx.koyeb.app
+    in Koyeb dashboard → Environment. Without it, cross-origin API calls
+    are blocked in production (but same-origin page loads work fine).
+
+    To add a custom domain later (Phase 5+), uncomment the arivu.app lines.
+    """
+    if Config.DEBUG:
+        CORS(app,
+             origins=["http://localhost:3000", "http://localhost:5000", "http://127.0.0.1:5000"],
+             supports_credentials=True)
+        return
+
+    origins = []
+    koyeb = Config.KOYEB_PUBLIC_DOMAIN.strip().lstrip("https://").lstrip("http://")
+    if koyeb:
+        origins.append(f"https://{koyeb}")
+    # Custom domain (Phase 5+): uncomment when DNS is configured
+    # origins += ["https://arivu.app", "https://www.arivu.app"]
+
+    if origins:
+        CORS(app,
+             origins=origins,
+             supports_credentials=True,
+             allow_headers=["Content-Type", "X-Session-ID"],
+             methods=["GET", "POST", "OPTIONS"])
     else:
-        CORS(
-            app,
-            origins=["https://arivu.app", "https://www.arivu.app"],
-            supports_credentials=True,
-            allow_headers=["Content-Type", "X-Session-ID"],
-            methods=["GET", "POST", "OPTIONS"],
+        app.logger.warning(
+            "CORS: KOYEB_PUBLIC_DOMAIN not set. Cross-origin requests blocked. "
+            "Set in Koyeb dashboard → Environment after first deploy."
         )
 
 
-# NLP worker health cached for 30s — prevents the /health route from making
-# a 3-second outbound HTTP call on every Koyeb health check probe.
+# ── Security headers ─────────────────────────────────────────────────────────
+
+# Defined at MODULE LEVEL (no @app decorator here) — registered in create_app()
+def add_security_headers(response):
+    """
+    Attach security headers to every response.
+    CSP matches what base.html loads (D3, Chart.js, Google Fonts).
+    connect-src includes wss: for SSE compatibility under proxies.
+    """
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' "
+        "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net "
+        "https://fonts.googleapis.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "connect-src 'self' https://api.semantic-scholar.org wss:; "
+        "img-src 'self' data: https:; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if not Config.DEBUG:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ── NLP health cache ─────────────────────────────────────────────────────────
+
 _NLP_HEALTH: dict = {"ok": False, "checked_at": 0.0}
-_NLP_HEALTH_TTL: float = 30.0  # seconds
+_NLP_HEALTH_TTL: float = 30.0
 
 
 def _nlp_worker_reachable() -> bool:
-    """
-    Return True if the NLP worker /health responds with 200.
-    Result is cached for _NLP_HEALTH_TTL seconds.
-    Never raises — catches all exceptions.
-    """
-    import time as _time
-    import requests as req
-
-    now = _time.monotonic()
+    """Check NLP worker /health. Cached for _NLP_HEALTH_TTL seconds. Never raises."""
+    import requests as _req
+    now = time.monotonic()
     if now - _NLP_HEALTH["checked_at"] < _NLP_HEALTH_TTL:
         return _NLP_HEALTH["ok"]
-
     try:
-        resp = req.get(f"{config.NLP_WORKER_URL}/health", timeout=3)
+        resp = _req.get(f"{Config.NLP_WORKER_URL}/health", timeout=3)
         result = resp.status_code == 200
     except Exception:
         result = False
-
     _NLP_HEALTH["ok"] = result
     _NLP_HEALTH["checked_at"] = now
     return result
 
 
-def create_app() -> Flask:
-    """
-    Flask application factory.
-    Gunicorn invocation: gunicorn "app:create_app()"
-    Test invocation: app = create_app(); client = app.test_client()
-    """
-    app = Flask(__name__)
-    app.secret_key = config.SECRET_KEY
+# ── Application factory ──────────────────────────────────────────────────────
 
-    # Logging is configured INSIDE the factory — never at module level.
+def create_app():
+    """
+    Application factory. Called by gunicorn: gunicorn "app:create_app()"
+    Also called by tests: app = create_app(); client = app.test_client()
+
+    Creates a fresh Flask instance each call (required for test isolation —
+    Flask 3.x refuses to add middleware after first request).
+    Updates the module-level `app` reference for route registration.
+    """
+    global app
+    app = Flask(__name__)
+    app.secret_key = Config.SECRET_KEY
+
+    Config.validate()
+
     logging.basicConfig(
-        level=logging.DEBUG if config.DEBUG else logging.INFO,
+        level=logging.DEBUG if Config.DEBUG else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    # CORS
+    _init_sentry(app)
     _configure_cors(app)
 
-    # Database pool
+    # Register security headers after_request hook
+    app.after_request(add_security_headers)
+
+    # DB pool — sized for 2 gunicorn workers on Neon free tier
+    # 2 workers × DB_POOL_MAX(4) = 8 connections + 2 reserved for scripts = 10 total ✅
     from backend.db import init_pool
     init_pool(
-        database_url=config.DATABASE_URL,
-        minconn=config.DB_POOL_MIN,
-        maxconn=config.DB_POOL_MAX,
+        database_url=Config.DATABASE_URL,
+        minconn=Config.DB_POOL_MIN,
+        maxconn=Config.DB_POOL_MAX,
     )
-    logger.info("Database pool ready")
+    app.logger.info("Database pool ready")
 
-    # NLP worker startup check (non-fatal)
-    if not _nlp_worker_reachable():
-        logger.warning(
-            f"NLP worker at {config.NLP_WORKER_URL} is not reachable. "
-            "Graph builds will fail until the NLP worker is started."
-        )
-
-    # Error handlers
     register_error_handlers(app)
 
     # ── Routes ────────────────────────────────────────────────────────────
@@ -134,20 +207,40 @@ def create_app() -> Flask:
     @app.route("/health")
     def health():
         """
-        Health check endpoint.
-        HTTP 200 if DB is reachable; HTTP 503 if not.
-        NLP worker status is informational — does not affect HTTP status code.
-        Used by Koyeb health probes and the smoke test.
+        Health check. HTTP 200 if DB reachable, 503 otherwise.
+        Koyeb probes this every 30s. NLP and R2 status are informational.
+
+        Response shape — Phase 4 format (checks dict) AND legacy flat keys
+        for backward compatibility with test_smoke.py.
         """
         from backend.db import health_check
-        db_ok = health_check()
+        db_ok = False
+        try:
+            db_ok = health_check()
+        except Exception:
+            pass
+
         nlp_ok = _nlp_worker_reachable()
-        status = "ok" if db_ok else "degraded"
+
+        r2_ok = False
+        try:
+            from backend.r2_client import R2Client
+            r2_ok = R2Client()._enabled
+        except Exception:
+            pass
+
+        overall = "healthy" if db_ok else "degraded"
         return jsonify({
-            "status":     status,
-            "db":         db_ok,
-            "nlp_worker": nlp_ok,
+            "status":     overall,
+            "db":         db_ok,        # backward compat — test_smoke.py asserts this
+            "nlp_worker": nlp_ok,       # backward compat — test_smoke.py asserts this
+            "checks": {
+                "database":   "ok" if db_ok  else "error",
+                "nlp_worker": "ok" if nlp_ok else "unreachable",
+                "r2_storage": "ok" if r2_ok  else "error",
+            },
             "version":    "1.0.0",
+            "timestamp":  time.time(),
         }), 200 if db_ok else 503
 
     @app.route("/api/search", methods=["POST"])
@@ -167,10 +260,10 @@ def create_app() -> Flask:
         from backend.schemas import SearchRequest
 
         allowed, headers = await_sync(
-            arivu_rate_limiter.check(g.session_id, "POST /api/search")
+            rate_limiter.check(g.session_id, "POST /api/search")
         )
         if not allowed:
-            return jsonify(arivu_rate_limiter.get_429_body(headers)), 429, headers
+            return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
         try:
             body = SearchRequest(**request.get_json(force=True))
@@ -232,13 +325,12 @@ def create_app() -> Flask:
 
         # Rate limiting
         allowed, headers = await_sync(
-            arivu_rate_limiter.check(session_id, "GET /api/graph/stream")
+            rate_limiter.check(session_id, "GET /api/graph/stream")
         )
         if not allowed:
-            return jsonify(arivu_rate_limiter.get_429_body(headers)), 429, headers
+            return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
         # Check for recently cached graph (within GRAPH_CACHE_TTL_DAYS)
-        from backend.config import config as _cfg
         cached_graph = db.fetchone(
             """
             SELECT g.graph_id, g.graph_json_url
@@ -269,7 +361,7 @@ def create_app() -> Flask:
         # If cached, stream it immediately and finish
         if cached_graph:
             from backend.r2_client import R2Client
-            r2 = R2Client(_cfg)
+            r2 = R2Client()
             graph_data = r2.get_json(cached_graph["graph_json_url"])
 
             if graph_data is None:
@@ -394,8 +486,7 @@ def create_app() -> Flask:
             }), 404
 
         from backend.r2_client import R2Client
-        from backend.config import config as _cfg
-        r2 = R2Client(_cfg)
+        r2 = R2Client()
         graph_data = r2.get_json(row["graph_json_url"])
         if not graph_data:
             return jsonify({"error": "Graph data not available in storage"}), 404
@@ -429,7 +520,7 @@ def create_app() -> Flask:
         if row.get("graph_json_url"):
             try:
                 from backend.r2_client import R2Client
-                r2 = R2Client(config)
+                r2 = R2Client()
                 graph_json_data = r2.get_json(row["graph_json_url"])
             except Exception:
                 return None, None
@@ -456,10 +547,10 @@ def create_app() -> Flask:
         session_id = g.session_id
 
         allowed, headers = await_sync(
-            arivu_rate_limiter.check(session_id, "POST /api/prune")
+            rate_limiter.check(session_id, "POST /api/prune")
         )
         if not allowed:
-            return jsonify(arivu_rate_limiter.get_429_body(headers)), 429, headers
+            return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
         data = request.get_json(silent=True) or {}
         paper_ids = data.get("paper_ids", [])
@@ -640,10 +731,10 @@ def create_app() -> Flask:
         session_id = g.session_id
 
         allowed, headers = await_sync(
-            arivu_rate_limiter.check(session_id, "POST /api/chat")
+            rate_limiter.check(session_id, "POST /api/chat")
         )
         if not allowed:
-            return jsonify(arivu_rate_limiter.get_429_body(headers)), 429, headers
+            return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
         data = request.get_json(silent=True) or {}
         user_message = data.get("message", "")
@@ -731,7 +822,50 @@ def create_app() -> Flask:
         )
         return jsonify({"status": "flagged", "message": "Thank you for the feedback."})
 
-    # ── Phase 3 page routes ────────────────────────────────────────────────
+    # ─── GET /api/quality ────────────────────────────────────────────────
+
+    @app.route("/api/quality")
+    def api_quality():
+        """
+        Returns production quality metrics for the most recently built graph
+        in this session. Used for internal monitoring.
+        """
+        session_id = session_manager.get_session_id(request)
+        if not session_id:
+            return jsonify({"error": "Session required"}), 401
+
+        from backend.db import fetchone
+        row = fetchone(
+            """
+            SELECT g.graph_id, g.graph_json_url
+            FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s
+            ORDER BY g.created_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        )
+        if not row:
+            return jsonify({"quality_score": None, "message": "No graph built yet"}), 200
+
+        try:
+            from backend.r2_client import R2Client
+            from backend.quality_monitor import ProductionQualityMonitor
+
+            r2 = R2Client()
+            graph_json = r2.download_json(row["graph_json_url"])
+            if not graph_json:
+                return jsonify({"quality_score": None, "message": "Graph data not found in R2"}), 200
+            monitor = ProductionQualityMonitor()
+            result = monitor.analyze_graph_quality(graph_json)
+            result["graph_id"] = row["graph_id"]
+            return jsonify(result)
+        except Exception as exc:
+            app.logger.warning(f"Quality monitor failed: {exc}")
+            return jsonify({"quality_score": None, "error": "Quality analysis unavailable"}), 200
+
+    # ── Phase 3+4 page routes ─────────────────────────────────────────────
 
     @app.route("/")
     def index():
@@ -769,7 +903,7 @@ def create_app() -> Flask:
             return jsonify({"error": "Not found"}), 404
         try:
             from backend.r2_client import R2Client
-            r2 = R2Client(config)
+            r2 = R2Client()
             data = r2.get_json(f"precomputed/{slug}/graph.json")
             if data is None:
                 # Fallback: try loading from local precomputed files
@@ -806,7 +940,7 @@ def create_app() -> Flask:
             return "", 404
         try:
             from backend.r2_client import R2Client
-            r2 = R2Client(config)
+            r2 = R2Client()
             svg_data = r2.get(f"precomputed/{slug}/preview.svg")
             if svg_data is None:
                 return "", 404
@@ -818,7 +952,26 @@ def create_app() -> Flask:
         except Exception:
             return "", 404
 
-    logger.info("Arivu app created successfully")
+    # ── Gallery index route (Phase 4) ─────────────────────────────────────
+
+    @app.route("/static/gallery_index.json")
+    def gallery_index_json():
+        """
+        Serve data/gallery_index.json for the explore page stats overlay.
+        explore.html fetches this to update hardcoded placeholder numbers
+        with real precomputed stats after precompute_gallery.py runs.
+        """
+        import pathlib
+        path = pathlib.Path("data/gallery_index.json")
+        if not path.exists():
+            return jsonify([]), 404
+        return app.response_class(
+            response=path.read_text(encoding="utf-8"),
+            mimetype="application/json",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    app.logger.info("Arivu Phase 4 app ready")
     return app
 
 
@@ -839,10 +992,9 @@ def _paper_to_dict(paper) -> dict:
 
 
 if __name__ == "__main__":
-    import os
     application = create_app()
     application.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
-        debug=config.DEBUG,
+        debug=Config.DEBUG,
     )
