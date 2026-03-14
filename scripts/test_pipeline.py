@@ -30,6 +30,7 @@ logger = logging.getLogger("test_pipeline")
 
 ATTENTION_DOI = "10.48550/arXiv.1706.03762"   # "Attention Is All You Need"
 ATTENTION_ARXIV = "1706.03762"
+ATTENTION_S2_ID = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
 
 
 async def run_tests() -> int:
@@ -42,6 +43,9 @@ async def run_tests() -> int:
 
     failures = 0
     passed = 0
+
+    # Initialize DB pool early — needed for paper cache lookups and graph build
+    db.init_pool(config.DATABASE_URL)
 
     logger.info("=" * 60)
     logger.info("ARIVU PHASE 2 INTEGRATION TEST")
@@ -88,7 +92,9 @@ async def run_tests() -> int:
     seed_paper = None
 
     try:
-        seed_paper = await resolver.resolve(ATTENTION_ARXIV, "arxiv")
+        # Try S2 paper ID first (avoids arXiv→S2 translation API call,
+        # works when paper is cached in DB from a previous run)
+        seed_paper = await resolver.resolve(ATTENTION_S2_ID, "s2")
         assert seed_paper.paper_id, "paper_id is empty"
         assert seed_paper.title, "title is empty"
         assert "Attention" in seed_paper.title or "attention" in seed_paper.title.lower(), \
@@ -156,10 +162,11 @@ async def run_tests() -> int:
         try:
             from backend.graph_engine import AncestryGraph
             import backend.db as _db
-            # Temporarily override max depth
+            import uuid
             engine = AncestryGraph()
-            job_id = "test-" + str(int(time.time()))
-            # Create minimal build_jobs row so _emit() doesn't fail
+            job_id = str(uuid.uuid4())
+            # Create minimal build_jobs row so _emit() doesn't fail.
+            # DB pool already initialized at test start.
             _db.execute(
                 "INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at) "
                 "VALUES (%s, %s, 'test', 'pending', NOW()) ON CONFLICT DO NOTHING",

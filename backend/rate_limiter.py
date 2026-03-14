@@ -200,3 +200,12 @@ class ArivuRateLimiter:
 # ─── Module-level singletons — imported by app.py ────────────────────────────
 coordinated_rate_limiter = CoordinatedRateLimiter()
 arivu_rate_limiter = ArivuRateLimiter()
+
+# Adjust S2 rate limit based on API key availability.
+# Without an API key, S2 enforces ~1 req/s (not 10 req/s).
+try:
+    from backend.config import config as _cfg
+    if not _cfg.S2_API_KEY:
+        coordinated_rate_limiter._windows["semantic_scholar"] = _SlidingWindow(1, 1)
+except Exception:
+    pass  # Config not loaded yet — will use default 9 req/s

@@ -115,3 +115,84 @@ All tests fail with `AttributeError: module 'structlog.stdlib' has no attribute 
 
 ### Resolution
 Changed to `structlog.processors.TimeStamper(fmt="iso")` which is the correct location in structlog 24.1.0.
+
+---
+
+## [2026-03-14] [PHASE 2] [DRIFT] computed_at column referenced in Phase 2 code but added in Phase 3
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** app.py (graph cache query, graph retrieval route), backend/graph_engine.py (graphs upsert)
+**Severity:** HIGH
+
+### Finding
+Three locations in Phase 2 code reference `graphs.computed_at`:
+1. `app.py` line ~241: graph stream SSE cache lookup uses `g.computed_at > NOW() - INTERVAL '7 days'`
+2. `app.py` line ~375: `GET /api/graph/<paper_id>` uses `computed_at > NOW() - INTERVAL '7 days'`
+3. `graph_engine.py`: `ON CONFLICT` clause sets `computed_at = NOW()`
+
+The `computed_at` column is a Phase 3 addition (via `ALTER TABLE` in `migrate.py`). The Phase 1 `graphs` table only has `created_at` and `last_accessed`.
+
+### Impact
+Both the graph stream and graph retrieval routes throw `psycopg2.errors.UndefinedColumn` at runtime. Integration test graph build also fails on the upsert.
+
+### Resolution
+- `app.py`: Replaced `computed_at` with `last_accessed` (which exists from Phase 1 and serves the same TTL eviction purpose per CLAUDE.md Part 10).
+- `graph_engine.py`: Removed `computed_at = NOW()` from the `ON CONFLICT` clause, keeping only `last_accessed = NOW()`.
+
+---
+
+## [2026-03-14] [PHASE 2] [DRIFT] S2 API fieldsOfStudy returns strings, not objects
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/api_client.py — `_parse_s2_response()`
+**Severity:** MEDIUM
+
+### Finding
+The S2 API returns `fieldsOfStudy` as a flat list of strings (e.g., `["Computer Science"]`), not as a list of objects (e.g., `[{"category": "Computer Science"}]`). The implementation assumed the object format, calling `.get("category", "")` on each element, causing `'str' object has no attribute 'get'`.
+
+### Impact
+Paper resolution fails with `AttributeError` for any paper that has fields of study set.
+
+### Resolution
+Added type check: `[f if isinstance(f, str) else f.get("category", "") for f in ...]` to handle both formats.
+
+---
+
+## [2026-03-14] [PHASE 2] [DRIFT] S2 API rate limiting without API key — rate limiter too aggressive
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/rate_limiter.py, backend/api_client.py
+**Severity:** HIGH
+
+### Finding
+`CoordinatedRateLimiter` hard-codes S2 at 9 req/s (assumes API key present). Without an API key, S2 enforces ~1 req/s. This causes persistent 429 responses and IP-level rate limiting blocks lasting several minutes.
+
+Additionally, `_to_s2_id()` and `_fetch_s2()` in `api_client.py` had no retry logic for 429 responses — a single rate limit hit caused permanent failure.
+
+### Impact
+Integration test fails when no S2 API key is configured (common in local dev). Extended IP-level rate limiting blocks all subsequent S2 requests for minutes.
+
+### Resolution
+1. Added module-level S2 rate limit adjustment in `rate_limiter.py`: when `config.S2_API_KEY` is empty, S2 window is set to (1, 1) instead of (9, 1).
+2. Added exponential backoff retry (3 attempts: 30s, 60s, 120s) to both `_to_s2_id()` and `_fetch_s2()` in `api_client.py`.
+
+---
+
+## [2026-03-14] [PHASE 2] [DRIFT] Null guard missing in api_client.get_references()
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/api_client.py — `get_references()`
+**Severity:** MEDIUM
+
+### Finding
+S2 API sometimes returns null data or null items within the references response array. The implementation iterated over the response without null checks, causing `'NoneType' object is not iterable`.
+
+### Impact
+Graph builds fail when S2 returns partial/null reference data for any paper in the ancestry tree.
+
+### Resolution
+Added `if not data: return refs` and `if not item: continue` guards in `get_references()`.

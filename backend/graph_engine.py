@@ -261,8 +261,7 @@ class AncestryGraph:
                 created_at, last_accessed
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
             ON CONFLICT (graph_id) DO UPDATE SET
-                last_accessed = NOW(),
-                computed_at = NOW()
+                last_accessed = NOW()
             """,
             (
                 self._job_id,

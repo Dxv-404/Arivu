@@ -207,8 +207,12 @@ class SmartPaperResolver:
             return []
 
         refs: list[Paper] = []
-        for item in data.get("data", []):
-            cited = item.get("citedPaper", {})
+        if not data:
+            return refs
+        for item in (data.get("data") or []):
+            if not item:
+                continue
+            cited = item.get("citedPaper") or {}
             if not cited.get("paperId") or not cited.get("title"):
                 continue
             refs.append(Paper(
@@ -299,19 +303,24 @@ class SmartPaperResolver:
         url = f"https://api.semanticscholar.org/graph/v1/paper/{s2_ref}"
         params = {"fields": "paperId"}
 
-        await coordinated_rate_limiter.throttle("semantic_scholar")
-        try:
-            resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code in (404, 400):
+        for attempt in range(3):
+            await coordinated_rate_limiter.throttle("semantic_scholar")
+            try:
+                resp = await client.get(url, params=params, headers=headers)
+                if resp.status_code in (404, 400):
+                    return None
+                if resp.status_code == 429:
+                    wait = min(30 * (2 ** attempt), 120)
+                    logger.debug(f"S2 429 on ID translate, retrying in {wait}s (attempt {attempt+1}/3)")
+                    await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.json().get("paperId")
+            except Exception as e:
+                logger.debug(f"S2 ID translation failed ({s2_ref}): {e}")
                 return None
-            if resp.status_code == 429:
-                await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
-                return None
-            resp.raise_for_status()
-            return resp.json().get("paperId")
-        except Exception as e:
-            logger.debug(f"S2 ID translation failed ({s2_ref}): {e}")
-            return None
+        return None
 
     async def _fetch_s2(self, s2_id: str) -> Optional[dict]:
         """Fetch full metadata for a single paper from Semantic Scholar."""
@@ -320,21 +329,24 @@ class SmartPaperResolver:
         params = {"fields": _S2_FIELDS}
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
 
-        await coordinated_rate_limiter.throttle("semantic_scholar")
-        try:
-            resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code == 404:
+        for attempt in range(3):
+            await coordinated_rate_limiter.throttle("semantic_scholar")
+            try:
+                resp = await client.get(url, params=params, headers=headers)
+                if resp.status_code == 404:
+                    return None
+                if resp.status_code == 429:
+                    wait = min(30 * (2 ** attempt), 120)
+                    logger.debug(f"S2 429 on fetch, retrying in {wait}s (attempt {attempt+1}/3)")
+                    await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return self._parse_s2_response(resp.json())
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"S2 fetch failed for {s2_id}: {e}")
                 return None
-            if resp.status_code == 429:
-                await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
-                return None
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPStatusError as e:
-            logger.warning(f"S2 fetch failed for {s2_id}: {e}")
-            return None
-
-        return self._parse_s2_response(data)
+        return None
 
     async def _fetch_s2_batch(self, s2_ids: list[str]) -> list[dict]:
         """
@@ -404,7 +416,7 @@ class SmartPaperResolver:
             "authors":      [a.get("name", "") for a in (data.get("authors") or [])],
             "doi":          external_ids.get("DOI"),
             "arxiv_id":     external_ids.get("ArXiv"),
-            "fields_of_study": [f.get("category", "") for f in (data.get("fieldsOfStudy") or [])],
+            "fields_of_study": [f if isinstance(f, str) else f.get("category", "") for f in (data.get("fieldsOfStudy") or [])],
             "url":          data.get("url") or f"https://www.semanticscholar.org/paper/{data.get('paperId')}",
             "references":   [
                 {"paper_id": r.get("paperId"), "title": r.get("title"), "doi": (r.get("externalIds") or {}).get("DOI")}

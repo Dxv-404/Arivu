@@ -238,8 +238,8 @@ def create_app() -> Flask:
                 SELECT paper_id FROM papers
                 WHERE paper_id = %s OR doi = %s
               )
-              AND g.computed_at > NOW() - INTERVAL '7 days'
-            ORDER BY g.computed_at DESC
+              AND g.last_accessed > NOW() - INTERVAL '7 days'
+            ORDER BY g.last_accessed DESC
             LIMIT 1
             """,
             (session_id, paper_id, paper_id),
@@ -372,8 +372,8 @@ def create_app() -> Flask:
             """
             SELECT graph_json_url FROM graphs
             WHERE seed_paper_id = %s
-            AND computed_at > NOW() - INTERVAL '7 days'
-            ORDER BY computed_at DESC LIMIT 1
+            AND last_accessed > NOW() - INTERVAL '7 days'
+            ORDER BY last_accessed DESC LIMIT 1
             """,
             (paper_id,),
         )
