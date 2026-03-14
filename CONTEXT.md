@@ -6,12 +6,13 @@ Phase 2 — Data Layer, NLP Worker & Graph Build Pipeline
 ## Phases
 ### Completed
 - [x] Phase 1 — skeleton, schema, smoke tests
+- [x] Phase 2 — data layer, NLP worker, graph build pipeline
 
 ### In Progress
-- [ ] Phase 2 — Data layer, NLP worker, graph build pipeline
+- [ ] Phase 3 — Full-text pipeline, intelligence layer & frontend
 
 ### Not Started
-- Phase 3 through Phase 8
+- Phase 4 through Phase 8
 
 ## Live Deployment (Phase 4+)
 | Service | URL |
@@ -25,10 +26,11 @@ Phase 2 — Data Layer, NLP Worker & Graph Build Pipeline
 - Conda env `arivu` with Python 3.11.15
 
 ## Last Session Summary
-Phase 1 completed: created 60+ files (5 real backend modules, 20+ stubs, NLP worker skeleton, migration script, tests, templates, static assets). Set up Docker pgvector on port 5433, conda env with Python 3.11. Migration creates 17 tables, 3 smoke tests pass. Logged 5 entries to CRITIQUE_LOG.md (bcrypt version, stub attributions, gallery path, resend version — all resolved or deferred). Created DECISIONS.md with 13 architecture decisions from Phase 1 §27.
+Phase 2 completed: implemented 10 real backend modules replacing Phase 1 stubs (nlp_worker/app.py, rate_limiter.py, r2_client.py, session_manager.py, normalizer.py, deduplicator.py, api_client.py, nlp_pipeline.py, graph_engine.py) plus app.py route additions (POST /api/search, GET /api/graph/stream SSE, GET /api/graph/<paper_id>). Created tests/test_phase2.py (32 unit tests), scripts/test_pipeline.py (integration test). Updated conftest.py, pytest.ini, .env.example. All 35 tests pass (3 smoke + 32 phase 2). Logged structlog TimeStamper drift fix to CRITIQUE_LOG.md.
 
 ## Known Issues / Blockers
-- [DEFERRED] llm_client.py, chat_guide.py, prompt_sanitizer.py phase attribution unclear (Phase 3 vs Phase 4) — will resolve when reaching Phase 3
+- Integration test (scripts/test_pipeline.py) requires NLP worker running on port 7860 — start with `cd nlp_worker && uvicorn app:app --port 7860`
+- R2 not configured in local dev — graphs not cached (expected, graceful degradation)
 
 ## Environment
 - DATABASE_URL: postgresql://arivu:localdev@localhost:5433/arivu?sslmode=disable
