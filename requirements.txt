@@ -1,0 +1,59 @@
+# requirements.txt - main Flask app (all pinned)
+# DO NOT add sentence-transformers, torch, or any ML model here.
+# Those belong exclusively in nlp_worker/requirements.txt.
+
+# Web framework
+flask==3.0.3
+flask-cors==4.0.1
+
+# WSGI server
+gunicorn==22.0.0
+
+# Database
+psycopg2-binary==2.9.9
+pgvector==0.2.5
+
+# HTTP clients
+requests==2.32.3
+httpx==0.27.0
+aiohttp==3.9.5
+
+# Graph engine (pure Python - no ML)
+networkx==3.3
+
+# Data validation
+pydantic[email]==2.7.1
+
+# NLP helpers (no model, no torch)
+numpy==1.26.4
+scikit-learn==1.4.2
+
+# File processing
+PyMuPDF==1.24.3
+python-magic==0.4.27
+langdetect==1.0.9
+
+# LLM
+groq==0.8.0
+
+# Object storage (R2 is S3-compatible)
+boto3==1.34.101
+
+# Auth / security
+bcrypt==4.1.2
+
+# Document generation (export phase)
+python-docx==1.1.2
+reportlab==4.2.0
+
+# Monitoring
+sentry-sdk[flask]==2.3.1
+structlog==24.1.0
+
+# Utilities
+python-dotenv==1.0.1
+python-dateutil==2.9.0
+
+# Payments / email (stubs until Phase 6)
+stripe==9.9.0
+resend==2.3.0

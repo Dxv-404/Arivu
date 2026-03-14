@@ -1,0 +1,8 @@
+# requirements-dev.txt - development and testing only
+# Never install in production
+
+pytest==8.2.0
+pytest-asyncio==0.23.6
+black==24.4.2
+flake8==7.0.0
+mypy==1.9.0
