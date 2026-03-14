@@ -49,7 +49,7 @@ Applied all 6 corrections from CLAUDE.md Part 16 to stub comments.
 ## [2026-03-14] [PHASE 1] [SPEC_GAP] Stub phase attribution for llm_client, chat_guide, prompt_sanitizer
 
 **Type:** SPEC_GAP
-**Status:** DEFERRED
+**Status:** RESOLVED
 **Affects:** backend/llm_client.py, backend/chat_guide.py, backend/prompt_sanitizer.py stub comments
 **Severity:** LOW
 
@@ -60,7 +60,7 @@ Phase 1 stub table assigns these three files to Phase 4. CLAUDE.md Part 7 (proje
 Only affects stub comments — no functional impact in Phase 1. Will be resolved when Phase 3 or Phase 4 implementation begins.
 
 ### Resolution
-Using Phase 1 stub table values (Phase 4) since Part 16 is the explicit correction list and does not include these files. Will reassess when reaching Phase 3.
+CLAUDE.md Part 7 is authoritative: these files are Phase 3 implementations. Part 7 explicitly marks `llm_client.py ← Phase 3`, `chat_guide.py ← Phase 3`, `prompt_sanitizer.py ← Phase 3`. Phase 2 §18 confirms: "Do not implement backend/llm_client.py, backend/chat_guide.py — Phase 4" but CLAUDE.md Part 7 takes precedence as the project structure authority. The stub comments remain as-is (Phase 4) since Part 16 did not list them as corrections; actual implementation will happen in Phase 3 per Part 7.
 
 ---
 
@@ -97,3 +97,21 @@ Cannot install dependencies at all with `resend==0.7.2` and `requests==2.32.3` t
 
 ### Resolution
 Updated to `resend==2.3.0` per CONFLICT-007 (Phase 6 value). Resend is only used in Phase 6+ — this change has zero functional impact on Phase 1.
+
+---
+
+## [2026-03-14] [PHASE 2] [DRIFT] structlog.stdlib.TimeStamper → structlog.processors.TimeStamper
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** app.py — structlog configuration
+**Severity:** LOW
+
+### Finding
+Phase 2 §15 specifies `structlog.stdlib.TimeStamper(fmt="iso")` in the app.py import block. In `structlog==24.1.0` (the pinned version), `TimeStamper` is in `structlog.processors`, not `structlog.stdlib`. This caused an `AttributeError` at module import time, breaking all tests.
+
+### Impact
+All tests fail with `AttributeError: module 'structlog.stdlib' has no attribute 'TimeStamper'`.
+
+### Resolution
+Changed to `structlog.processors.TimeStamper(fmt="iso")` which is the correct location in structlog 24.1.0.
