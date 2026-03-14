@@ -364,6 +364,35 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_bg_jobs_status  ON background_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_bg_jobs_created ON background_jobs(created_at);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Phase 3 additions: ALTER TABLE for graphs columns + insights + insight_feedback tables
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE graphs ADD COLUMN IF NOT EXISTS leaderboard_json JSONB;
+ALTER TABLE graphs ADD COLUMN IF NOT EXISTS dna_json JSONB;
+ALTER TABLE graphs ADD COLUMN IF NOT EXISTS diversity_json JSONB;
+ALTER TABLE graphs ADD COLUMN IF NOT EXISTS computed_at TIMESTAMP DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS insights (
+    insight_id   SERIAL PRIMARY KEY,
+    paper_id     TEXT NOT NULL,
+    insight_type TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    upvotes      INT DEFAULT 0,
+    downvotes    INT DEFAULT 0,
+    created_at   TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_insights_paper_id ON insights(paper_id);
+
+CREATE TABLE IF NOT EXISTS insight_feedback (
+    id           SERIAL    PRIMARY KEY,
+    insight_id   INTEGER   NOT NULL,
+    session_id   TEXT,
+    feedback     TEXT      CHECK (feedback IN ('helpful', 'not_helpful')),
+    created_at   TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_insight_feedback_insight ON insight_feedback(insight_id);
 """
 
 

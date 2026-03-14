@@ -27,6 +27,7 @@ pydantic[email]==2.7.1
 # NLP helpers (no model, no torch)
 numpy==1.26.4
 scikit-learn==1.4.2
+scipy==1.11.4
 
 # File processing
 PyMuPDF==1.24.3

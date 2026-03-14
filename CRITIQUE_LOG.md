@@ -196,3 +196,66 @@ Graph builds fail when S2 returns partial/null reference data for any paper in t
 
 ### Resolution
 Added `if not data: return refs` and `if not item: continue` guards in `get_references()`.
+
+---
+
+## [2026-03-15] [PHASE 3] [DRIFT] Python 3.10.11 instead of spec-required 3.11.8
+
+**Type:** DRIFT
+**Status:** DEFERRED
+**Affects:** runtime.txt, all Python code
+**Severity:** LOW
+
+### Finding
+The spec requires Python 3.11.8 (specified in `runtime.txt`). The development environment uses Python 3.10.11 (system install at `C:\Users\xplod\AppData\Local\Programs\Python\Python310\python.exe`) because:
+1. Conda envs `arivu` and `arivu2` were corrupted by Windows Defender blocking python.exe
+2. Python 3.13 (also available on system) is incompatible with numpy==1.26.4
+3. Python 3.10.11 was the only viable option for the `.venv` workaround
+
+### Impact
+Risk is LOW. Python 3.10 → 3.11 differences are minimal for this codebase:
+- `tomllib` (3.11 stdlib) not used — we use `python-dotenv`
+- `ExceptionGroup` (3.11) not used
+- `match/case` syntax not used in any spec code
+- `str | None` type hints (3.10+) work fine
+- All pinned dependencies support both 3.10 and 3.11
+- Production deployment (Koyeb) will use `runtime.txt` which specifies 3.11.8 — local dev version is irrelevant
+
+### Resolution
+DEFERRED. No action needed. Production uses `runtime.txt` (3.11.8). Local dev uses 3.10.11. All tests pass. Will revisit only if a 3.11-specific feature is needed.
+
+---
+
+## [2026-03-15] [PHASE 3] [CONFLICT] CONFLICT-001 — CSS file naming resolved
+
+**Type:** CONFLICT
+**Status:** RESOLVED
+**Affects:** static/css/style.css vs static/css/main.css
+**Severity:** MEDIUM
+
+### Finding
+Phase 1 creates `static/css/style.css` as a stub. Phase 3 "New files" list shows `static/css/main.css`. Phase 8 modified files list references `static/css/style.css` for confidence badge styles, seen-paper opacity, and fault-line edges.
+
+### Impact
+Renaming to main.css would break Phase 8 references to style.css.
+
+### Resolution
+User decision: Populate existing `style.css` with all Phase 3 CSS content. Keep `style.css` as the canonical filename. Templates reference `style.css`. Phase 3 spec's mention of `main.css` was a naming inconsistency — the real file is `style.css`.
+
+---
+
+## [2026-03-15] [PHASE 3] [CONFLICT] CONFLICT-002 — Landing demo JS naming resolved
+
+**Type:** CONFLICT
+**Status:** RESOLVED
+**Affects:** static/js/landing-demo.js vs static/js/index.js
+**Severity:** MEDIUM
+
+### Finding
+Phase 1 creates `static/js/landing-demo.js` as a stub. Phase 3 creates `static/js/index.js` as the landing page demo state machine. CLAUDE.md Part 7 project structure lists `landing-demo.js`.
+
+### Impact
+Creating index.js separately would leave an unused stub and could cause import confusion in templates.
+
+### Resolution
+User decision: Populate existing `landing-demo.js` with Phase 3 demo state machine code. Keep `landing-demo.js` as the canonical filename. Templates reference `landing-demo.js`. No `index.js` created.

@@ -1,1 +1,148 @@
-/* panels.css — Right panel, bottom bar, leaderboard styles. Real implementation in Phase 3. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARIVU — PANEL STYLES (panels.css)
+   Right panel sections, bottom bar, orphan cards, chat guide
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── RIGHT PANEL ───────────────────────────────────────────────────────── */
+
+#right-panel {
+  grid-area: right;
+  overflow-y: auto;
+  border-left: 1px solid var(--bg-elevated);
+  background: var(--bg-primary);
+}
+.right-panel-inner { padding: 16px; }
+
+/* ─── PANEL SECTIONS ────────────────────────────────────────────────────── */
+
+.panel-section { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--bg-elevated); }
+.panel-section:last-child { border-bottom: none; }
+.panel-section h3 { margin-bottom: 8px; color: var(--text-primary); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.panel-sub { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; }
+.panel-note { font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; }
+.panel-section.hidden { display: none; }
+
+.dna-chart-wrapper { height: 200px; }
+.score-badge { display: inline-block; padding: 2px 8px; background: var(--bg-elevated); border-radius: 99px; font-size: 0.75rem; color: var(--accent-gold); margin-left: 8px; }
+
+/* Pruning stats */
+.prune-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat-item { text-align: center; }
+.stat-big { display: block; font-size: 1.5rem; font-weight: 700; }
+.stat-big.danger { color: var(--danger); }
+.stat-big.success { color: var(--success); }
+.stat-label { font-size: 0.75rem; color: var(--text-muted); }
+
+/* ─── CHAT GUIDE ────────────────────────────────────────────────────────── */
+
+#chat-messages {
+  min-height: 80px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding: 8px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+.chat-input-row { display: flex; gap: 8px; }
+#chat-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+}
+#chat-input:focus { outline: none; border-color: var(--accent-blue); }
+#chat-send {
+  padding: 8px 14px;
+  background: var(--accent-blue);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.chat-msg { padding: 6px 0; font-size: 0.85rem; }
+.chat-msg.user { color: var(--text-primary); }
+.chat-msg.assistant { color: var(--text-secondary); }
+
+/* ─── BOTTOM BAR ────────────────────────────────────────────────────────── */
+
+#bottom-bar {
+  grid-area: bottom;
+  border-top: 1px solid var(--bg-elevated);
+  background: var(--bg-primary);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.bottom-bar-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--bg-elevated);
+  padding: 0 16px;
+}
+.bottom-bar-tabs button[role="tab"] {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  transition: color 0.15s;
+}
+.bottom-bar-tabs button[aria-selected="true"] {
+  color: var(--accent-gold);
+  border-bottom-color: var(--accent-gold);
+}
+
+/* ─── ORPHAN CARDS ───────────────────────────────────────────────────────── */
+
+.orphan-cards-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  height: 100%;
+  align-items: stretch;
+}
+.orphan-card {
+  flex-shrink: 0;
+  width: 220px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.orphan-concept { font-size: 0.875rem; font-style: italic; color: var(--text-primary); }
+.orphan-meta { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); }
+.orphan-sparkline { height: 40px; }
+.orphan-stats { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); }
+.orphan-relevance { color: var(--accent-teal); }
+.orphan-highlight-btn {
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  margin-top: auto;
+}
+.orphan-highlight-btn:hover { background: var(--accent-blue); color: white; }
+
+/* ─── DNA COMPARISON ────────────────────────────────────────────────────── */
+
+.dna-compare-row { display: flex; gap: 12px; }
+.dna-compare-row > div { flex: 1; text-align: center; }
+.chart-label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px; }

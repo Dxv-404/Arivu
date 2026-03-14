@@ -1,1 +1,76 @@
-/* loading.css — Loading screen, progress bar, skeleton styles. Real implementation in Phase 3. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARIVU — LOADING STYLES (loading.css)
+   Loading overlay, progress bar, log entries, skeleton states
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  background: var(--bg-primary);
+}
+
+#loading-overlay.hidden { display: none; }
+
+.loading-inner { width: 480px; padding: 32px; }
+
+.loading-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#progress-icon { font-size: 1.5rem; }
+#progress-message { font-size: 1rem; color: var(--text-primary); }
+
+.progress-bar-track {
+  height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent-gold);
+  border-radius: 99px;
+  width: 0;
+  transition: width 0.4s ease;
+}
+
+#progress-log {
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+/* ─── SKELETON LOADING ──────────────────────────────────────────────────── */
+
+.skeleton {
+  background: linear-gradient(90deg,
+    var(--bg-surface) 25%,
+    var(--bg-elevated) 50%,
+    var(--bg-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-text { height: 14px; margin-bottom: 8px; }
+.skeleton-circle { width: 40px; height: 40px; border-radius: 50%; }

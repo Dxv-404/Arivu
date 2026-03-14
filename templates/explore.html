@@ -1,1 +1,116 @@
-<!-- explore.html — Gallery page stub. Real implementation in Phase 3. -->
+{% extends "base.html" %}
+{% block title %}Arivu — Explore Research Lineages{% endblock %}
+
+{% block body %}
+<header class="explore-header">
+  <a href="/" class="logo-link">
+    <svg width="72" height="20" viewBox="0 0 72 20" aria-hidden="true">
+      <text x="0" y="16" font-family="Inter" font-weight="700" font-size="18"
+            fill="#D4A843" letter-spacing="-0.5">arivu</text>
+    </svg>
+  </a>
+  <nav aria-label="Site navigation">
+    <a href="/">Home</a>
+    <a href="/explore" aria-current="page">Explore</a>
+  </nav>
+</header>
+
+<main class="explore-main">
+  <h1>Explore Research Lineages</h1>
+  <p class="explore-sub">Precomputed intellectual ancestry graphs for landmark papers.</p>
+
+  <div class="gallery-grid" role="list">
+    <article role="listitem" class="gallery-entry" data-slug="attention">
+      <a href="/explore/attention">
+        <div class="entry-preview">
+          <img src="/static/previews/attention.svg" alt="Citation graph preview for Attention Is All You Need"
+               loading="lazy" width="200" height="150">
+        </div>
+        <div class="entry-info">
+          <h2>Attention Is All You Need</h2>
+          <p>Vaswani et al., 2017 &middot; 152 papers &middot; 7 fields</p>
+          <p class="entry-hook">The Transformer's intellectual ancestors &mdash; and what 31% of modern NLP depends on.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="bert">
+      <a href="/explore/bert">
+        <div class="entry-preview">
+          <img src="/static/previews/bert.svg" alt="BERT citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>BERT: Pre-training of Deep Bidirectional Transformers</h2>
+          <p>Devlin et al., 2018 &middot; 198 papers &middot; 5 fields</p>
+          <p class="entry-hook">How pre-training on text became the dominant paradigm for language understanding.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="alexnet">
+      <a href="/explore/alexnet">
+        <div class="entry-preview">
+          <img src="/static/previews/alexnet.svg" alt="AlexNet citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>ImageNet Classification with Deep CNNs (AlexNet)</h2>
+          <p>Krizhevsky et al., 2012 &middot; 87 papers &middot; 4 fields</p>
+          <p class="entry-hook">The paper that restarted deep learning &mdash; and the decades of vision work it synthesised.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="gans">
+      <a href="/explore/gans">
+        <div class="entry-preview">
+          <img src="/static/previews/gans.svg" alt="GANs citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>Generative Adversarial Networks</h2>
+          <p>Goodfellow et al., 2014 &middot; 134 papers &middot; 6 fields</p>
+          <p class="entry-hook">Game theory meets deep learning: the ancestry of generative AI.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="resnet">
+      <a href="/explore/resnet">
+        <div class="entry-preview">
+          <img src="/static/previews/resnet.svg" alt="ResNet citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>Deep Residual Learning for Image Recognition</h2>
+          <p>He et al., 2015 &middot; 111 papers &middot; 4 fields</p>
+          <p class="entry-hook">Skip connections and the 50-year path from perceptrons to 1000-layer networks.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="word2vec">
+      <a href="/explore/word2vec">
+        <div class="entry-preview">
+          <img src="/static/previews/word2vec.svg" alt="Word2Vec citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>Efficient Estimation of Word Representations (Word2Vec)</h2>
+          <p>Mikolov et al., 2013 &middot; 96 papers &middot; 5 fields</p>
+          <p class="entry-hook">The distributional hypothesis made computable: how dense word embeddings rewired NLP.</p>
+        </div>
+      </a>
+    </article>
+
+    <article role="listitem" class="gallery-entry" data-slug="gpt2">
+      <a href="/explore/gpt2">
+        <div class="entry-preview">
+          <img src="/static/previews/gpt2.svg" alt="GPT-2 citation graph preview" loading="lazy">
+        </div>
+        <div class="entry-info">
+          <h2>Language Models are Unsupervised Multitask Learners (GPT-2)</h2>
+          <p>Radford et al., 2019 &middot; 143 papers &middot; 6 fields</p>
+          <p class="entry-hook">Autoregressive pre-training at scale: the ancestral thread from n-grams to GPT-4.</p>
+        </div>
+      </a>
+    </article>
+  </div>
+</main>
+{% endblock %}

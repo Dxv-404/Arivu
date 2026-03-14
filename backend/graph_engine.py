@@ -5,18 +5,16 @@ Orchestrates:
   1. BFS crawl via SmartPaperResolver
   2. Reference selection (semantic relevance + citation count)
   3. DAG enforcement (cycle removal)
-  4. Paper embedding population (paper_embeddings table, for Phase 3+ pgvector)
+  4. Paper embedding population (paper_embeddings table, for pgvector)
   5. NLP pipeline (InheritanceDetector)
   6. export_to_json() — D3.js-compatible format
   7. R2 caching and DB graph record
+  8. Post-build: leaderboard, DNA profile, diversity score (Phase 3)
 
-Phase 2 produces the graph JSON. Pruning impact precomputation is added in Phase 3.
-DNA profiling and diversity scoring are added in Phase 4.
-
-Full-text extraction: deferred to Phase 3. In Phase 2, all text comes from
-abstracts (text_tier 3) or titles only (text_tier 4). The full-text pipeline
-(PDF fetch → section extraction → text_tier 1/2) will be implemented in Phase 3
-alongside the pruning engine which benefits most from richer text.
+Phase 2 established the graph JSON pipeline.
+Phase 3 adds _on_graph_complete() for leaderboard/DNA/diversity computation,
+from_json() for reconstructing cached graphs, and data_completeness for
+coverage-gated features like gap finding.
 """
 import asyncio
 import json
@@ -108,9 +106,81 @@ class AncestryGraph:
 
     def __init__(self):
         self.graph: nx.DiGraph = nx.DiGraph()
+        self.nodes: dict[str, Paper] = {}          # paper_id → Paper
+        self.seed_paper_id: Optional[str] = None
         self._job_id: Optional[str] = None
         self._resolver: SmartPaperResolver = resolver
         self._nlp: InheritanceDetector = InheritanceDetector()
+
+    # ─── Reconstruct from cached JSON ──────────────────────────────────────────
+
+    @classmethod
+    def from_json(cls, graph_json: dict) -> "AncestryGraph":
+        """
+        Reconstruct an AncestryGraph from the JSON dict produced by export_to_json().
+        Used by /api/prune, /api/dna, /api/diversity — they load the cached graph
+        from R2 / DB rather than rebuilding it.
+        """
+        instance = cls.__new__(cls)
+        instance.nodes = {}
+        instance.graph = nx.DiGraph()
+
+        for node_data in graph_json.get("nodes", []):
+            # Map "id" → "paper_id" since export uses "id"
+            node_dict = dict(node_data)
+            if "id" in node_dict and "paper_id" not in node_dict:
+                node_dict["paper_id"] = node_dict.pop("id")
+
+            try:
+                paper = Paper(**{
+                    k: v for k, v in node_dict.items()
+                    if k in Paper.__dataclass_fields__
+                })
+                instance.nodes[paper.paper_id] = paper
+                instance.graph.add_node(paper.paper_id)
+            except Exception:
+                pass
+
+        for edge_data in graph_json.get("edges", []):
+            src = edge_data.get("source")
+            tgt = edge_data.get("target")
+            if src and tgt:
+                instance.graph.add_edge(src, tgt, **edge_data)
+
+        instance.metadata = graph_json.get("metadata", {})
+        instance.seed_paper_id = instance.metadata.get("seed_paper_id")
+        instance._job_id = instance.metadata.get("graph_id")
+        instance._resolver = resolver
+        instance._nlp = InheritanceDetector()
+        return instance
+
+    # ─── Public export method ─────────────────────────────────────────────────
+
+    def export_to_json(self) -> dict:
+        """Public export — delegates to _export_to_json with stored context."""
+        seed_paper = self.nodes.get(self.seed_paper_id)
+        if seed_paper:
+            return self._export_to_json(seed_paper, self.nodes)
+        return {"nodes": [], "edges": [], "metadata": {}}
+
+    # ─── Coverage score ───────────────────────────────────────────────────────
+
+    @property
+    def data_completeness(self):
+        """Coverage score based on text_tier distribution."""
+        if not self.nodes:
+            return None
+
+        class _Coverage:
+            def __init__(self, score):
+                self.coverage_score = score
+
+        total = len(self.nodes)
+        full_text = sum(
+            1 for p in self.nodes.values()
+            if getattr(p, "text_tier", 4) <= 2
+        )
+        return _Coverage(full_text / total if total > 0 else 0.0)
 
     # ─── Main entry point ────────────────────────────────────────────────────
 
@@ -148,6 +218,7 @@ class AncestryGraph:
         canonical_id, id_type = normalize_user_input(seed_paper_id)
         seed_paper = await self._resolver.resolve(canonical_id, id_type)
         all_papers[seed_paper.paper_id] = seed_paper
+        self.seed_paper_id = seed_paper.paper_id
 
         max_depth = determine_crawl_depth(seed_paper, user_goal)
         logger.info(f"Building graph: seed={seed_paper.paper_id[:8]}… depth={max_depth}")
@@ -234,7 +305,10 @@ class AncestryGraph:
                     "comparable":             ea.comparable,
                 })
 
-        # ── Step 6: Export and cache ──────────────────────────────────────
+        # ── Step 6: Store node references for downstream use ─────────────
+        self.nodes = all_papers
+
+        # ── Step 7: Export and cache ──────────────────────────────────────
         await self._emit("finalizing", "Building graph export…")
         graph_json = self._export_to_json(seed_paper, all_papers)
         build_time = time.time() - build_start
@@ -258,10 +332,11 @@ class AncestryGraph:
                 node_count, edge_count, max_depth,
                 coverage_score, coverage_report,
                 model_version, build_time_seconds,
-                created_at, last_accessed
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
+                created_at, last_accessed, computed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW(), NOW())
             ON CONFLICT (graph_id) DO UPDATE SET
-                last_accessed = NOW()
+                last_accessed = NOW(),
+                computed_at = NOW()
             """,
             (
                 self._job_id,
@@ -270,33 +345,100 @@ class AncestryGraph:
                 len(graph_json["nodes"]),
                 len(graph_json["edges"]),
                 max_depth,
-                None,          # coverage_score — computed in Phase 3
-                json.dumps({}),  # coverage_report — populated in Phase 3
+                None,          # coverage_score
+                json.dumps({}),  # coverage_report
                 MODEL_VERSION,
                 round(build_time, 2),
             ),
         )
 
-        # Link graph to session (via job record)
+        # ── Step 8: Post-build bookkeeping ────────────────────────────────
+        # Compute leaderboard, DNA, diversity; link session → graph
         try:
             job_row = db.fetchone(
                 "SELECT session_id FROM build_jobs WHERE job_id = %s",
                 (self._job_id,),
             )
-            if job_row and job_row.get("session_id"):
+            session_id = (job_row or {}).get("session_id", "")
+        except Exception:
+            session_id = ""
+
+        self._on_graph_complete(self._job_id, session_id)
+
+        await self._emit("done", "Graph ready.", graph=graph_json)
+        return graph_json
+
+    # ─── Post-build bookkeeping ──────────────────────────────────────────────
+
+    def _on_graph_complete(self, graph_id: str, session_id: str) -> None:
+        """
+        Post-build bookkeeping:
+        1. INSERT into session_graphs linking session → graph
+        2. Compute leaderboard JSON and store in graphs table
+        3. Compute DNA profile and store in graphs table
+        4. Compute diversity score and store in graphs table
+
+        Called after NLP analysis finishes, before streaming 'done' event.
+        All failures are logged and swallowed — graph is still usable.
+        """
+        from backend.pruning import compute_all_pruning_impacts
+
+        # 1. Link session to graph
+        if session_id:
+            try:
                 db.execute(
                     """
                     INSERT INTO session_graphs (session_id, graph_id, created_at)
                     VALUES (%s, %s, NOW())
-                    ON CONFLICT DO NOTHING
+                    ON CONFLICT (session_id, graph_id) DO NOTHING
                     """,
-                    (job_row["session_id"], self._job_id),
+                    (session_id, graph_id),
                 )
-        except Exception as e:
-            logger.debug(f"session_graphs insert failed (non-fatal): {e}")
+            except Exception as exc:
+                logger.warning(f"session_graphs insert failed: {exc}")
 
-        await self._emit("done", "Graph ready.", graph=graph_json)
-        return graph_json
+        # 2. Leaderboard — precompute pruning impact for every node
+        try:
+            leaderboard = compute_all_pruning_impacts(self.graph)
+            sorted_leaderboard = sorted(
+                [{"paper_id": k, **v} for k, v in leaderboard.items()],
+                key=lambda x: x["collapse_count"],
+                reverse=True,
+            )[:20]
+
+            # Enrich with paper metadata for the UI
+            for entry in sorted_leaderboard:
+                paper = self.nodes.get(entry["paper_id"])
+                if paper:
+                    entry["title"] = getattr(paper, "title", "")
+                    entry["year"] = getattr(paper, "year", None)
+                    entry["authors"] = (getattr(paper, "authors", []) or [])[:2]
+
+            db.execute(
+                "UPDATE graphs SET leaderboard_json = %s WHERE graph_id = %s",
+                (json.dumps(sorted_leaderboard), graph_id),
+            )
+        except Exception as exc:
+            logger.warning(f"leaderboard computation failed: {exc}")
+
+        # 3 + 4. DNA profile + diversity score (best-effort)
+        try:
+            from backend.dna_profiler import DNAProfiler
+            from backend.diversity_scorer import DiversityScorer
+
+            paper_ids = list(self.nodes.keys())
+            profiler = DNAProfiler()
+            dna = profiler.compute_profile(paper_ids, self.seed_paper_id, self.nodes)
+
+            scorer = DiversityScorer()
+            diversity = scorer.compute_score(paper_ids, self.nodes, dna_profile=dna)
+
+            db.execute(
+                "UPDATE graphs SET dna_json = %s, diversity_json = %s WHERE graph_id = %s",
+                (json.dumps(dna.to_dict()), json.dumps(diversity.to_dict()), graph_id),
+            )
+        except Exception as exc:
+            logger.warning(f"DNA/diversity computation failed: {exc}")
 
     # ─── Embedding population ─────────────────────────────────────────────────
 

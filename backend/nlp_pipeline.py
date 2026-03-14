@@ -514,3 +514,257 @@ Return ONLY valid JSON — no markdown, no preamble:
             )
         except Exception as e:
             logger.debug(f"Cache save failed for edge {ea.edge_id}: {e}")
+
+    # ─── Phase 3: Full-text enrichment ─────────────────────────────────────
+
+    async def _enrich_with_full_text_signals(
+        self,
+        edge: dict,
+        citing_full_text,   # PaperFullText | None
+        cited_paper,        # Paper
+    ) -> dict:
+        """
+        When citing_paper has full text (Tier 1), compute:
+        - citation_position: where in the paper is the cited paper mentioned
+        - linguistic_markers: dict from LinguisticMarkerDetector.detect_markers()
+        These become Signal 2 and Signal 3 in compute_inheritance_confidence().
+        """
+        if not citing_full_text or citing_full_text.text_tier != 1:
+            return edge
+
+        detector = linguistic_marker_detector
+
+        # Citation position
+        position = detector.get_citation_position(citing_full_text, cited_paper)
+        edge["citation_position"] = position
+
+        # Linguistic markers — search in intro + methods sections
+        search_text = " ".join(filter(None, [
+            citing_full_text.introduction,
+            citing_full_text.methods,
+        ]))
+        if search_text:
+            markers = detector.detect_markers(search_text, cited_paper)
+            edge["linguistic_markers"] = markers
+
+        return edge
+
+    def compute_inheritance_confidence(
+        self,
+        citing_paper,         # Paper
+        cited_paper,          # Paper
+        stage1_result: dict,
+        stage2_result: dict,
+        stage3_result: dict,
+        citing_full_text=None,  # PaperFullText | None
+    ) -> float:
+        """
+        Combine all signals into final inheritance confidence score.
+        Weights adapt based on available signals — fewer signals = lower max confidence.
+        Phase 3 upgrade: position and linguistic marker signals when full text available.
+        """
+        signals = {}
+        weights = {}
+
+        # Signal 1: Semantic similarity (always available)
+        similarity = stage1_result.get("similarity_score", 0)
+        signals["similarity"] = similarity
+        weights["similarity"] = 0.30
+
+        # Signal 2: Citation position in full text (Tier 1 only)
+        if citing_full_text and citing_full_text.text_tier == 1:
+            position = stage2_result.get("citation_position", "unknown")
+            position_scores = {
+                "methods": 1.0,
+                "introduction": 0.65,
+                "results": 0.5,
+                "related_work_only": 0.2,
+                "conclusion": 0.3,
+                "unknown": 0.4,
+            }
+            signals["position"] = position_scores.get(position, 0.4)
+            weights["position"] = 0.25
+
+        # Signal 3: Linguistic inheritance markers (Tier 1 only)
+        if citing_full_text and citing_full_text.text_tier == 1:
+            markers = stage2_result.get("linguistic_markers")
+            if markers:
+                signals["linguistic"] = markers.get("inheritance_score", 0)
+                weights["linguistic"] = 0.25
+
+        # Signal 4: LLM classification confidence
+        if stage2_result.get("llm_classified"):
+            llm_conf = stage2_result.get("mutation_confidence", 0.5)
+            signals["llm"] = llm_conf
+            weights["llm"] = 0.15
+
+        # Signal 5: Structural importance
+        struct_importance = stage3_result.get("structural_importance_modifier", 0.5)
+        signals["structural"] = struct_importance
+        weights["structural"] = 0.05
+
+        # Normalize weights to sum to 1.0
+        total_weight = sum(weights.values())
+        normalized_weights = {k: v / total_weight for k, v in weights.items()}
+
+        # Weighted combination
+        confidence = sum(signals[k] * normalized_weights[k] for k in signals)
+
+        # Confidence degrades when fewer signals available
+        signal_modifiers = {5: 1.0, 4: 0.90, 3: 0.80, 2: 0.70, 1: 0.55}
+        modifier = signal_modifiers.get(len(signals), 0.55)
+
+        return confidence * modifier
+
+
+# ─── LINGUISTIC INHERITANCE MARKER DETECTION ─────────────────────────────────
+# Only usable for Tier 1 papers with full text available.
+
+class LinguisticMarkerDetector:
+    """
+    Detects explicit inheritance language in full text.
+    When full text is available (Tier 1), linguistic markers are the
+    highest-confidence signal for inheritance classification.
+    """
+
+    STRONG_INHERITANCE = [
+        r"we (extend|build on|build upon|follow|adopt|use|employ|apply)",
+        r"following \w+",
+        r"building on \w+",
+        r"based on (the (work|approach|method|framework) of)",
+        r"inspired by \w+",
+        r"similar to \w+.{0,20}we",
+        r"as (proposed|introduced|described) by \w+",
+        r"the (method|approach|technique|framework) (of|from|by) \w+",
+    ]
+
+    CONTRADICTION_MARKERS = [
+        r"unlike \w+",
+        r"in contrast to \w+",
+        r"\w+ fail(s|ed) to",
+        r"contrary to \w+",
+        r"\w+ (overlook|ignore|neglect)(s|ed)",
+        r"the limitation(s?) of \w+",
+        r"we show that \w+",
+        r"we argue that \w+.{0,50}incorrect",
+    ]
+
+    INCIDENTAL_MARKERS = [
+        r"(related|similar) work include(s?)",
+        r"(see also|see e\.g\.|see for example)",
+        r"among others",
+        r"and (many )?others",
+    ]
+
+    def __init__(self):
+        self._strong = [re.compile(p, re.IGNORECASE) for p in self.STRONG_INHERITANCE]
+        self._contra = [re.compile(p, re.IGNORECASE) for p in self.CONTRADICTION_MARKERS]
+        self._incident = [re.compile(p, re.IGNORECASE) for p in self.INCIDENTAL_MARKERS]
+
+    def detect_markers(self, text: str, cited_paper) -> dict:
+        """
+        Find citation markers in text and link them to the cited paper.
+        cited_paper: backend.models.Paper instance.
+        """
+        author_names = self._get_searchable_names(cited_paper)
+
+        results = {
+            "strong_inheritance": [],
+            "contradiction": [],
+            "incidental": [],
+            "author_mentions": [],
+            "inheritance_score": 0.0,
+        }
+
+        for author_name in author_names:
+            name_pattern = re.compile(rf"\b{re.escape(author_name)}\b", re.IGNORECASE)
+            for match in name_pattern.finditer(text):
+                ctx_start = max(0, match.start() - 150)
+                ctx_end = min(len(text), match.end() + 150)
+                context = text[ctx_start:ctx_end]
+                results["author_mentions"].append({
+                    "position": match.start(),
+                    "context": context,
+                    "author": author_name,
+                })
+
+                for pattern in self._strong:
+                    if pattern.search(context):
+                        results["strong_inheritance"].append(context)
+                        break
+                for pattern in self._contra:
+                    if pattern.search(context):
+                        results["contradiction"].append(context)
+                        break
+                for pattern in self._incident:
+                    if pattern.search(context):
+                        results["incidental"].append(context)
+                        break
+
+        n_strong = len(results["strong_inheritance"])
+        n_contra = len(results["contradiction"])
+        n_incidental = len(results["incidental"])
+        n_total = n_strong + n_contra + n_incidental
+
+        if n_total == 0:
+            results["inheritance_score"] = 0.3      # Mentioned but no clear marker
+        elif n_strong > 0 and n_contra == 0:
+            results["inheritance_score"] = 0.8 + min(0.15, n_strong * 0.05)
+        elif n_contra > 0 and n_strong == 0:
+            results["inheritance_score"] = 0.1      # Contradiction, not inheritance
+        elif n_incidental > 0 and n_strong == 0:
+            results["inheritance_score"] = 0.2      # Incidental only
+        else:
+            results["inheritance_score"] = 0.5      # Mixed signals
+
+        return results
+
+    def get_citation_position(self, full_text, cited_paper) -> str:
+        """
+        Where in the paper is the cited paper mentioned?
+        full_text: PaperFullText instance.
+        Returns the most significant position found.
+        Priority: methods > results > introduction > conclusion > related_work.
+        """
+        author_names = self._get_searchable_names(cited_paper)
+
+        sections = {
+            "methods": full_text.methods,
+            "results": full_text.results,
+            "introduction": full_text.introduction,
+            "conclusion": full_text.conclusion,
+            "related_work": full_text.related_work,
+        }
+
+        positions_found = set()
+        for section_name, section_text in sections.items():
+            if not section_text:
+                continue
+            for name in author_names:
+                if re.search(rf"\b{re.escape(name)}\b", section_text, re.IGNORECASE):
+                    positions_found.add(section_name)
+
+        PRIORITY = ["methods", "results", "introduction", "conclusion", "related_work"]
+        for pos in PRIORITY:
+            if pos in positions_found:
+                return pos
+
+        return "related_work_only" if positions_found else "unknown"
+
+    def _get_searchable_names(self, paper) -> list:
+        """Extract searchable last names from paper authors."""
+        names = []
+        for author in (getattr(paper, "authors", []) or []):
+            if "," in author:
+                lastname = author.split(",")[0].strip()
+            else:
+                parts = author.strip().split()
+                lastname = parts[-1] if parts else author
+            lastname = re.sub(r"[^\w\s]", "", lastname).strip()
+            if len(lastname) > 2:
+                names.append(lastname)
+        return names
+
+
+# Singleton for use by graph_engine
+linguistic_marker_detector = LinguisticMarkerDetector()

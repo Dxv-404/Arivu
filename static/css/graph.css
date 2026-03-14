@@ -1,1 +1,111 @@
-/* graph.css — Graph container, tooltip, node/edge styles. Real implementation in Phase 3. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARIVU — GRAPH STYLES (graph.css)
+   Graph container, tooltip, node/edge SVG styles, prune UI, leaderboard
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#graph-container {
+  grid-area: graph;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+#graph-svg-container { width: 100%; height: 100%; }
+
+/* ─── GRAPH TOOLTIP ──────────────────────────────────────────────────────── */
+
+#graph-tooltip {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  max-width: 320px;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.tooltip-title { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; line-height: 1.3; }
+.tooltip-meta { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px; }
+.tooltip-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.tooltip-stats .stat { font-size: 0.75rem; padding: 2px 8px; background: var(--bg-elevated); border-radius: 99px; }
+.stat.bottleneck { background: rgba(212,168,67,0.15); color: var(--accent-gold); }
+.stat.retracted { background: rgba(239,68,68,0.15); color: var(--danger); }
+.tooltip-actions { font-size: 0.75rem; color: var(--text-muted); }
+.tooltip-mutation-type { font-weight: 600; margin-bottom: 4px; }
+.tooltip-confidence { font-size: 0.8rem; margin-bottom: 6px; }
+.tooltip-section-label { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); margin-top: 6px; }
+.tooltip-sentence { font-size: 0.8rem; color: var(--text-secondary); font-style: italic; margin: 4px 0; padding: 4px 8px; background: var(--bg-elevated); border-radius: var(--radius-sm); }
+.tooltip-similarity { font-size: 0.75rem; color: var(--text-muted); }
+.tooltip-flag .flag-btn { background: none; border: none; color: var(--text-muted); font-size: 0.75rem; cursor: pointer; padding: 4px 0; }
+.tooltip-flag .flag-btn:hover { color: var(--danger); }
+.tooltip-warning { font-size: 0.75rem; color: var(--warning); margin: 4px 0; }
+
+/* ─── PRUNE UI ───────────────────────────────────────────────────────────── */
+
+#prune-pill {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent-gold);
+  border-radius: 99px;
+  padding: 8px 20px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+#prune-pill.hidden { display: none; }
+#prune-execute-btn { padding: 6px 16px; background: var(--accent-gold); color: #0a0e17; border: none; border-radius: 99px; font-weight: 600; cursor: pointer; }
+#prune-clear-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; }
+
+/* Selected node state */
+g.node.prune-selected circle { stroke: var(--accent-gold) !important; stroke-width: 3px !important; }
+
+/* Keyboard hint */
+#keyboard-hint {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+#keyboard-hint.hidden { display: none; }
+kbd { background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono); }
+
+/* ─── LEADERBOARD SIDEBAR ─────────────────────────────────────────────────── */
+
+#leaderboard-sidebar {
+  position: absolute;
+  left: -320px;
+  top: 0;
+  width: 320px;
+  height: 100%;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--bg-elevated);
+  transition: left 0.3s ease;
+  z-index: 10;
+  overflow-y: auto;
+  padding: 16px;
+}
+#leaderboard-sidebar.open { left: 0; }
+#leaderboard-sidebar h3 { margin-bottom: 4px; }
+.sidebar-sub { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 16px; }
+#leaderboard-list { list-style: none; }
+#leaderboard-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bg-elevated);
+}
+.leaderboard-rank { font-size: 1rem; font-weight: 700; color: var(--accent-gold); min-width: 24px; }
+.leaderboard-info { flex: 1; }
+.leaderboard-title { font-size: 0.875rem; font-weight: 500; }
+.leaderboard-impact { font-size: 0.75rem; color: var(--danger); }
