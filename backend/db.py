@@ -57,18 +57,40 @@ def _get_conn():
     """
     Context manager: acquire a connection from the pool, commit on success,
     rollback + re-raise on any exception, always return to pool.
-    Guarantees the pool never receives a connection in an aborted-tx state.
+
+    Stale connection recovery: if the connection from the pool is closed
+    (Neon drops idle connections after ~5 min, Koyeb cold starts lose
+    pool state), we discard it and get a fresh one. psycopg2 pools don't
+    have built-in test-on-borrow, so we check conn.closed manually.
     """
     pool = get_pool()
     conn = pool.getconn()
+
+    # Detect and recover stale connections
+    if conn.closed:
+        logger.warning("Stale connection detected — returning to pool and getting fresh one")
+        pool.putconn(conn, close=True)
+        conn = pool.getconn()
+
     try:
         yield conn
         conn.commit()
+    except psycopg2.OperationalError:
+        # Connection died mid-query (network timeout, Neon restart).
+        # Close this dead connection so the pool doesn't reuse it.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        pool.putconn(conn, close=True)
+        raise
     except Exception:
         conn.rollback()
         raise
     finally:
-        pool.putconn(conn)
+        # Only putconn if we haven't already (OperationalError path closes it)
+        if not conn.closed:
+            pool.putconn(conn)
 
 
 def fetchone(sql: str, params: tuple = ()) -> Optional[dict]:
