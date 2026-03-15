@@ -34,10 +34,14 @@ Phase 7 — Temporal Intelligence, Workflow Tools & Public API
 - Neon URL requires stripping `channel_binding=require` (psycopg2 incompatible)
 - R2 bucket: `arivu-graphs` (not `arivu-data` from spec)
 - Koyeb free tier scales to zero after 65 min idle — upgrade to eNano ($1.61/mo) for always-on production use
-- ENABLE_AUTH=false by default — all @require_auth, @require_tier, @check_graph_limit decorators pass through
-- TIER_ORDER: free=0, researcher=1, lab=2
+- ENABLE_AUTH=false by default — @require_auth passes through; @require_tier and @check_graph_limit are DORMANT (never applied to routes)
+- TIER_ORDER dict exists in decorators.py (dormant) — all features free for authenticated users (ADR-016)
+- New users register with tier='researcher'; billing.py kept dormant for portfolio reference
 
 ## Last Session Summary
+Billing removal implementation complete (ADR-016). All features now free for authenticated users. Changes across 14 files: auth.py (new users register as tier='researcher'), decorators.py (usage-reset removed, require_tier/check_graph_limit marked DORMANT), app.py (8 @require_tier removed, 3 billing routes removed, free-tier counter removed, /pricing route removed, /api/usage updated), exceptions.py (GraphLimitReachedError marked DORMANT), rate_limiter.py (billing rate limit removed), config.py (Stripe warning removed), pricing.html (DELETED), account.html (simplified — no tier badge/usage/billing), base.html (no pricing nav/tier badge/upgrade nudge), account.js (billing portal handler removed), auth.css (dead billing CSS removed), nightly_maintenance.py (usage-reset/tier-downgrade removed), test_phase6.py (TestBillingWebhook deleted, tier tests simplified), mailer.py (welcome email updated). Tests: 168 passed, 0 failed. billing.py stays DORMANT (never imported by app.py). DB columns untouched. CONFLICT-009 and CONFLICT-007 now moot. Phase 7 §0.1/§2.3/§2.4 will be SKIPPED. Phase 8 §0.7 will be SKIPPED.
+
+### Previous Session Summary (Phase 6)
 Phase 6 implementation complete. Full auth, billing, GDPR, and intelligence module stack:
 
 **Core Auth Stack:**
@@ -86,6 +90,7 @@ Phase 6 implementation complete. Full auth, billing, GDPR, and intelligence modu
 - ground_truth_eval.py needs ≥20 pairs before running eval (currently has 5 seed pairs)
 - WeasyPrint requires libcairo2 on the system — verify Dockerfile includes it
 - Phase 6 migration not yet run against Neon (run scripts/migrate_phase6.py before deploying)
+- One-time Neon SQL needed: `UPDATE users SET tier = 'researcher' WHERE tier = 'free';` (existing users)
 - ENABLE_AUTH should be set to true in Koyeb only after end-to-end testing
 
 ## Environment

@@ -390,3 +390,108 @@ The route IS registered at `/api/prune` POST and responds with JSON — it is no
 
 ### Resolution
 Updated `verify_deployment.py` to check that the route exists and responds with JSON (status 400/404/500 with `content-type: application/json`) instead of checking for 401. The test now verifies the route is registered rather than testing auth behavior that `@require_session` does not provide.
+
+---
+
+## [2026-03-16] [PHASE 6] [DRIFT] independent_discovery.py — spec used non-existent LLM interface
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/independent_discovery.py — LLM call for discovery interpretation
+**Severity:** MEDIUM
+
+### Finding
+Phase 6 spec's `IndependentDiscoveryTracker` code references `LLMClient` and `call_llm()`, which do not exist in the codebase. The actual LLM interface is `get_llm_client()` returning an `ArivuLLMClient` instance with `generate_chat_response()`.
+
+### Impact
+Module would crash at runtime when trying to generate discovery interpretations.
+
+### Resolution
+Adapted to use `get_llm_client()` / `generate_chat_response()` from `backend/llm_client.py`, matching the established LLM interface from Phase 3.
+
+---
+
+## [2026-03-16] [PHASE 6] [DRIFT] citation_shadow.py — nx.descendants used instead of nx.ancestors
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/citation_shadow.py — shadow score calculation
+**Severity:** HIGH
+
+### Finding
+Phase 6 spec code used `nx.descendants(G, node_id)` to count papers influenced by a node. In a directed citation graph where edges go citing→cited (newer paper → older paper), `nx.descendants()` follows outgoing edges FROM a node — which traverses backwards in time to ancestors, not forwards to influenced papers. Additionally, `MIN_DIRECT_CITATIONS` was set to 2, filtering out valid shadow papers with exactly 1 direct citation.
+
+### Impact
+Shadow scores were calculated on the wrong set of papers, producing incorrect "shadow" rankings.
+
+### Resolution
+Changed to `nx.ancestors(G, node_id)` which correctly follows incoming edges TO a node (finding all papers that transitively cite it). Changed `MIN_DIRECT_CITATIONS` from 2 to 1.
+
+---
+
+## [2026-03-16] [PHASE 6] [DRIFT] gdpr.py — edge_flags table name used instead of edge_feedback
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/gdpr.py — user data export SQL query
+**Severity:** MEDIUM
+
+### Finding
+Phase 6 spec code in `generate_user_data_export()` queries `edge_flags` table, which doesn't exist. The canonical table name per CLAUDE.md Part 6.8 is `edge_feedback`.
+
+### Impact
+GDPR data export would crash with "relation edge_flags does not exist" when trying to export user flagging data.
+
+### Resolution
+Changed `edge_flags` to `edge_feedback` in the GDPR export SQL query.
+
+---
+
+## [2026-03-16] [PHASE 6] [DRIFT] Rate limiter spec used 3-tuples, existing code uses 2-tuples
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/rate_limiter.py — LIMITS dictionary format
+**Severity:** LOW
+
+### Finding
+Phase 6 spec shows rate limit entries as 3-tuples `(max_requests, window_seconds, burst)`, but the existing `ArivuRateLimiter.LIMITS` dictionary (from Phase 2) uses 2-tuples `(max_requests, window_seconds)`. The burst parameter is not implemented.
+
+### Impact
+Using 3-tuples would cause tuple unpacking errors in `check()` method.
+
+### Resolution
+Adapted all Phase 6 rate limit entries to 2-tuple format matching the existing implementation. Burst limiting is not implemented.
+
+---
+
+## [2026-03-16] [PHASE 7] [CRITIQUE] Billing/Tier Removal — Full Impact Analysis
+
+**Type:** CRITIQUE
+**Status:** RESOLVED
+**Affects:** billing.py, decorators.py, config.py, mailer.py, rate_limiter.py, app.py (8 routes), pricing.html, account.html, base.html, auth.css, account.js, nightly_maintenance.py, test_phase6.py; Phase 7 §0.1/§2.3/§2.4/§9 (13 routes); Phase 8 §0.7/§3.6 (9 routes)
+**Severity:** HIGH
+
+### Finding
+User has decided all Arivu features should be free — no payments, no billing tiers, no tier-gated features. Every authenticated user gets full access to everything.
+
+Analysis completed: 35 items across Phase 6 built code (Categories A), 14 items in Phase 7 planned code (Category B), 4 items in Phase 8 planned code (Category C), 7 DB schema items (Category D, all KEEP), and 6 test items (Category E).
+
+**Total impact:** ~550 lines of built code across 13 files + ~87 lines of planned code across ~11 spec sections.
+
+**Average score:** 7.1/25 (low-to-moderate removal difficulty).
+
+**Key finding:** Billing is architecturally well-isolated. `billing.py` has zero reverse dependencies. Tier gating uses the decorator pattern (@require_tier), making removal a one-line-per-route operation. The ENABLE_AUTH flag already provides a "everything free" passthrough — this decision formalizes that behavior for authenticated users.
+
+**Recommendation:** Hybrid strategy — delete billing.py, remove @require_tier decorators, remove billing UI. Keep DB schema columns untouched (no migration risk). Full analysis with score tables delivered in session output.
+
+### Impact
+- CONFLICT-009 (Phase 7 vs Phase 8 TIER_ORDER) becomes **moot** — no tier ordering needed
+- CONFLICT-007 (Stripe version mismatch) becomes **partially moot** — Stripe not needed
+- CLAUDE.md Part 6.9 (TIER_ORDER as "inviolable decision") must be overridden by explicit ADR
+- Phase 7 §0.1, §2.3, §2.4 become **skip** sections
+- Phase 8 §0.7 becomes a **skip** section
+- 22 routes across Phases 7–8 drop @require_tier (keep @require_auth only)
+
+### Resolution
+RESOLVED (2026-03-16). User chose modified hybrid: billing.py kept DORMANT (not deleted), all billing touchpoints removed from active code. 14 files changed, pricing.html deleted, 168 tests pass (2 billing tests removed). See DECISIONS.md ADR-016 for complete change list.
