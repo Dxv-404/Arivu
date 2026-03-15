@@ -1,7 +1,7 @@
 # Arivu — Active Context
 
 ## Current Phase
-Phase 5 — Export System, Advanced Intelligence & Custom Domain
+Phase 6 — Auth, Billing & GDPR
 
 ## Phases
 ### Completed
@@ -9,12 +9,13 @@ Phase 5 — Export System, Advanced Intelligence & Custom Domain
 - [x] Phase 2 — data layer, NLP worker, graph build pipeline
 - [x] Phase 3 — full-text pipeline, intelligence layer & frontend
 - [x] Phase 4 — deployment, production hardening & gallery launch
+- [x] Phase 5 — export system, advanced intelligence & custom domain
 
 ### In Progress
-- [ ] Phase 5 — export system, advanced intelligence & custom domain
+- [ ] Phase 6 — auth, billing & GDPR
 
 ### Not Started
-- Phase 6 through Phase 8
+- Phase 7 through Phase 8
 
 ## Live Deployment (Phase 4+)
 | Service | URL |
@@ -22,6 +23,7 @@ Phase 5 — Export System, Advanced Intelligence & Custom Domain
 | Backend (Koyeb) | https://supreme-dorthea-devkrishna-a8d9791a.koyeb.app |
 | NLP Worker (HF) | https://dxv-404-arivu-nlp.hf.space |
 | Database (Neon) | ep-young-haze-a1qrxgk6-pooler.ap-southeast-1.aws.neon.tech |
+| Custom Domain | pending DNS setup (arivu.app) |
 
 ## Architecture Notes
 - DB pool: 2 workers × DB_POOL_MAX=4 = 8 connections (Neon free cap = 10)
@@ -33,25 +35,33 @@ Phase 5 — Export System, Advanced Intelligence & Custom Domain
 - Koyeb free tier scales to zero after 65 min idle — upgrade to eNano ($1.61/mo) for always-on production use
 
 ## Last Session Summary
-Phase 4 deployment complete. Koyeb live and healthy. All critical verify_deployment.py
-checks passing. Health endpoint returns database=ok, nlp_worker=ok, r2_storage=ok.
-Landing page, tool page, gallery page all return HTTP 200. Gallery index serves 7 entries.
+Phase 5 implementation complete. All 18 §0 backports verified. Full feature implementation:
+- ExportGenerator with 8 export formats (graph-json, graph-csv/ZIP, bibtex, literature-review,
+  genealogy-pdf/WeasyPrint, action-log, graph-png/matplotlib, graph-svg)
+- LivingPaperScorer: citation velocity and trajectory analysis (rising/stable/declining/extinct)
+- OriginalityMapper: Pioneer/Synthesizer/Bridge/Refiner/Contradictor classification
+- ParadigmShiftDetector: 4-signal structural analysis (contradiction surge, cross-domain influx,
+  vocabulary fragmentation, cluster fragmentation)
+- generate_literature_review() added to ArivuLLMClient
+- 4 new API routes: POST /api/export/<type>, GET /api/living-score/<id>,
+  GET /api/originality/<id>, GET /api/paradigm/<seed_id>
+- ExportPanel frontend (export-panel.js, tool.html wiring, CSS)
+- load_retraction_watch.py real implementation (targets retraction_watch table)
+- ground_truth_eval.py real implementation + data/ground_truth/pairs.json (5 seed pairs)
+- generate_og_image.py for branded 1200×630 OG image
+- 135 tests passing (40 new Phase 5 tests, 0 failures)
 
-Fixed verify_deployment.py prune test — @require_session auto-creates sessions (never
-returns 401). Updated test to verify route exists (returns JSON) instead of checking for
-401 which the decorator never produces.
-
-Gallery precompute pending (requires running precompute_gallery.py after S2 API key arrives).
-/api/prune route confirmed registered and responding.
-
-Added CRITIQUE_LOG entries for Dockerfile Debian Trixie rename and prune test fix.
-Added DECISIONS.md ADR-014 (Neon production DB) and ADR-015 (HF Spaces NLP worker).
+Key backport fixes applied: GALLERY_INDEX_PATH corrected (§0.3), R2Client.presigned_url()
+added (§0.4), quality_monitor confidence field fixed to base_confidence (§0.5),
+ground_truth_eval.py phase reference fixed (§0.13), data/ground_truth/ directory created (§0.14).
 
 ## Known Issues / Blockers
 - Gallery previews not yet generated — run precompute_gallery.py once S2 key arrives
 - Koyeb free tier will scale to zero after 65 min idle
 - S2_API_KEY pending approval from Semantic Scholar
-- Production routes using @require_session return 500 for first-time visitors (session creation under gunicorn multi-worker — investigating)
+- Custom domain (arivu.app) DNS not yet configured
+- ground_truth_eval.py needs ≥20 pairs before running eval (currently has 5 seed pairs)
+- WeasyPrint requires libcairo2 on the system — verify Dockerfile includes it
 
 ## Environment
 - DATABASE_URL: postgresql://arivu:localdev@localhost:5433/arivu?sslmode=disable (local)
