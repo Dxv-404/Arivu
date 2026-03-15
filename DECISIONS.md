@@ -28,5 +28,23 @@ If you are about to decide something not recorded here, add it first.
 | 18 | NLP worker Dockerfile | Flat COPY paths (no nlp_worker/ prefix) | HF Spaces builds from flat repo root; Dockerfile must COPY from . not nlp_worker/ |
 | 19 | gallery_index.json path | data/gallery_index.json (root of data/) | Moved from data/precomputed/ in Phase 4 per CLAUDE.md Part 6.4 |
 
+| 20 | Dockerfile Debian Trixie | libgdk-pixbuf-xlib-2.0-0 (NOT libgdk-pixbuf2.0-0) | Package renamed in Debian Trixie; old name causes Koyeb build failure |
+
+## ADR-014: Production database
+**Date:** 2026-03-15
+**Context:** Needed a hosted PostgreSQL with pgvector support, free tier, no sleep on inactivity.
+**Decision:** Neon.tech PostgreSQL 16, AWS ap-southeast-1 Singapore.
+**Alternatives considered:** Supabase (more complex free tier), Railway (limited free hours).
+**Rationale:** Closest AWS region to India on Neon free tier. 10 connection cap fits 2-worker Koyeb setup (2×4+2=10).
+**Implications:** `channel_binding=require` must be stripped from connection string. Locks to 10 connections max on free tier.
+
+## ADR-015: NLP worker hosting
+**Date:** 2026-03-15
+**Context:** sentence-transformers model is ~200MB — exceeds Koyeb free tier 512MB RAM.
+**Decision:** HuggingFace Spaces CPU Basic free tier.
+**Alternatives considered:** Koyeb paid tier, Railway.
+**Rationale:** Free, always-on CPU with 16GB RAM. Model stays warm after first load. No cost.
+**Implications:** 10-15 min cold start on first push. NLP_WORKER_TIMEOUT must be 90s minimum.
+
 ## Open Questions
 [Add questions here as they arise - resolve and move to Settled before implementing]
