@@ -201,6 +201,75 @@ class ArivuLLMClient:
             logger.debug(f"Cluster label generation failed: {e}")
             return f"Research cluster ({len(paper_titles)} papers)"
 
+    def generate_literature_review(self, graph_data: dict) -> str:
+        """
+        Generate a structured Markdown literature review for the graph.
+        Grounded: only uses facts from the graph — does not add training knowledge.
+        Returns Markdown string. Returns "" if LLM unavailable.
+        """
+        if not self.available:
+            return ""
+
+        nodes      = graph_data.get("nodes", [])
+        meta       = graph_data.get("metadata", {})
+        seed_title = meta.get("seed_paper_title", "the seed paper")
+
+        sorted_nodes = sorted(nodes, key=lambda n: n.get("year") or 9999)
+        papers_list  = "\n".join(
+            f"- {n.get('year', 'n.d.')} | {n.get('title', 'Untitled')} | "
+            f"{', '.join((n.get('authors') or ['Unknown'])[:2])}"
+            for n in sorted_nodes[:30]
+        )
+
+        model = config.GROQ_SMART_MODEL
+        system_prompt = "You are writing a structured academic literature review."
+        user_prompt = f"""CRITICAL RULES:
+1. Only use the paper information listed below — do NOT add knowledge from your training
+2. Do not invent claims, dates, or relationships not present in the data
+3. Write in Markdown format with clear section headings
+
+GRAPH DATA:
+Seed paper: {seed_title}
+Total papers: {len(nodes)}
+
+PAPERS IN GRAPH (chronological):
+{papers_list}
+
+TASK: Write a 400-600 word structured literature review covering:
+1. ## Overview — what this graph represents
+2. ## Foundational Work — the earliest/most cited papers
+3. ## Development — how ideas evolved over time
+4. ## Current State — most recent papers in the graph
+
+Use only the papers listed above. Format as Markdown."""
+
+        key = _cache_key(model, system_prompt, user_prompt)
+        cached = self._check_cache(key)
+        if cached:
+            return cached
+
+        try:
+            client = self._get_client()
+            if not client:
+                return ""
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.5,
+                max_tokens=1500,
+            )
+            text = response.choices[0].message.content.strip()
+            self._store_cache(key, _cache_key("", "", user_prompt), text, model)
+            return text
+
+        except Exception as exc:
+            logger.warning(f"generate_literature_review failed: {exc}")
+            return ""
+
     def generate_chat_response(self, system_prompt: str, user_prompt: str,
                                  history: list = None) -> str | None:
         """

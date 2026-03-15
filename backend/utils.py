@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-GALLERY_DIR = Path(__file__).parent.parent / "data" / "precomputed"
-GALLERY_INDEX_PATH = GALLERY_DIR / "gallery_index.json"
+# Phase 5: gallery_index.json lives at data/gallery_index.json (not data/precomputed/)
+# Pre-computed individual graph JSONs remain in data/precomputed/<slug>.json
+GALLERY_DIR        = Path(__file__).parent.parent / "data" / "precomputed"
+GALLERY_INDEX_PATH = Path(__file__).parent.parent / "data" / "gallery_index.json"
 
 
 def await_sync(coro: Coroutine[Any, Any, T]) -> T:

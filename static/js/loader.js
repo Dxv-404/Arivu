@@ -114,6 +114,12 @@ class GraphLoader {
         graphData.dna_profile
       );
     }
+
+    // Initialise export panel after graph loads
+    if (window.ExportPanel) {
+      const exportPanel = new ExportPanel("export-panel-container");
+      exportPanel.render();
+    }
   }
 
   _initChat(graphSummary) {

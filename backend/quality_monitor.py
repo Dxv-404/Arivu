@@ -82,8 +82,15 @@ class ProductionQualityMonitor:
             )
 
         # ── 3. Confidence score distribution ──────────────────────
-        confidences = [e.get("final_confidence") or e.get("mutation_confidence", 0)
-                      for e in edges]
+        # Field names: export_to_json() uses base_confidence (from EdgeAnalysis dataclass).
+        # Also accept mutation_confidence and final_confidence for forward compatibility.
+        confidences = [
+            e.get("base_confidence")
+            or e.get("mutation_confidence")
+            or e.get("final_confidence")
+            or 0
+            for e in edges
+        ]
         if confidences:
             low_conf = [c for c in confidences if c < 0.4]
             metrics["low_confidence_rate"] = round(len(low_conf) / len(confidences), 3)

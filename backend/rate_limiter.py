@@ -143,6 +143,11 @@ class ArivuRateLimiter:
         "GET /api/diversity":     (20, 60),
         "GET /api/orphans":       (10, 60),
         "GET /api/export":        (10, 3600),
+        # Phase 5 — export + intelligence endpoints
+        "POST /api/export":       (10, 3600),  # 10 exports/hour — storage intensive
+        "GET /api/living-score":  (30, 60),    # 30/minute — computed from DB
+        "GET /api/originality":   (20, 60),    # 20/minute — embedding lookups
+        "GET /api/paradigm":      (10, 60),    # 10/minute — heavier computation
     }
 
     def __init__(self):

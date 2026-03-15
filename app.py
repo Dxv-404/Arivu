@@ -29,6 +29,10 @@ from backend.llm_client import get_llm_client
 from backend.chat_guide import ChatGuide
 from backend.prompt_sanitizer import PromptSanitizer
 from backend.graph_engine import AncestryGraph
+from backend.export_generator import ExportGenerator
+from backend.living_paper_scorer import LivingPaperScorer
+from backend.originality_mapper import OriginalityMapper
+from backend.paradigm_detector import ParadigmShiftDetector
 from exceptions import ArivuError, register_error_handlers
 
 logger = logging.getLogger(__name__)
@@ -971,7 +975,204 @@ def create_app():
             headers={"Cache-Control": "public, max-age=300"},
         )
 
-    app.logger.info("Arivu Phase 4 app ready")
+    # ── Phase 5 routes ───────────────────────────────────────────────────────
+
+    # ─── POST /api/export/<export_type> ──────────────────────────────────────
+
+    @app.route("/api/export/<export_type>", methods=["POST"])
+    def api_export(export_type: str):
+        """
+        Generate a downloadable export of the current graph.
+        Body (optional): {"extra": {"svg_data": "..."}}
+        Response: {"url": "https://...", "filename": "arivu_graph.json", "expires_in": 3600}
+        """
+        session_id = session_manager.get_session_id(request)
+        if not session_id:
+            return jsonify({"error": "Session required"}), 401
+
+        allowed, headers = rate_limiter.check_sync(session_id, "POST /api/export")
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        if export_type not in ExportGenerator.EXPORT_TYPES:
+            return jsonify({
+                "error": f"Unknown export type {export_type!r}. "
+                         f"Allowed: {ExportGenerator.EXPORT_TYPES}"
+            }), 400
+
+        from backend.db import fetchone
+        row = fetchone(
+            """
+            SELECT g.graph_id, g.graph_json_url
+            FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s
+            ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (session_id,),
+        )
+        if not row:
+            return jsonify({"error": "No graph built yet in this session"}), 404
+
+        try:
+            from backend.r2_client import R2Client
+            r2         = R2Client()
+            graph_data = r2.download_json(row["graph_json_url"])
+            if not graph_data:
+                return jsonify({"error": "Graph data not found in R2"}), 404
+        except Exception as exc:
+            app.logger.warning(f"R2 graph fetch failed: {exc}")
+            return jsonify({"error": "Could not load graph data"}), 500
+
+        body       = request.get_json(silent=True) or {}
+        extra      = body.get("extra", {})
+        llm_client = None
+        try:
+            from backend.llm_client import ArivuLLMClient
+            llm_client = ArivuLLMClient()
+        except Exception:
+            pass
+
+        try:
+            gen = ExportGenerator()
+            url = gen.generate(
+                export_type=export_type,
+                graph_data=graph_data,
+                session_id=session_id,
+                llm_client=llm_client,
+                extra=extra,
+            )
+            filename = url.split("/")[-1].split("?")[0]
+            return jsonify({"url": url, "filename": filename, "expires_in": 3600})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
+        except Exception as exc:
+            app.logger.error(f"Export generation failed: {exc}")
+            return jsonify({"error": "Export generation failed"}), 500
+
+    # ─── GET /api/living-score/<paper_id> ────────────────────────────────────
+
+    @app.route("/api/living-score/<paper_id>")
+    def api_living_score(paper_id: str):
+        """
+        Compute living score for a single paper within the session's current graph.
+        Response: {"score": 72.3, "trajectory": "rising", "recent_citations": 15, ...}
+        """
+        session_id = session_manager.get_session_id(request)
+        if not session_id:
+            return jsonify({"error": "Session required"}), 401
+
+        allowed, headers = rate_limiter.check_sync(session_id, "GET /api/living-score")
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        from backend.db import fetchone
+        from backend.r2_client import R2Client
+        row = fetchone(
+            """
+            SELECT g.graph_json_url FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (session_id,),
+        )
+        if not row:
+            return jsonify({"error": "No graph built yet"}), 404
+
+        try:
+            graph_data = R2Client().download_json(row["graph_json_url"])
+        except Exception:
+            return jsonify({"error": "Could not load graph"}), 500
+
+        scorer = LivingPaperScorer()
+        result = scorer.score_single(paper_id, graph_data)
+        if result is None:
+            return jsonify({"error": f"Paper {paper_id} not found in current graph"}), 404
+        return jsonify(result.to_dict())
+
+    # ─── GET /api/originality/<paper_id> ─────────────────────────────────────
+
+    @app.route("/api/originality/<paper_id>")
+    def api_originality(paper_id: str):
+        """
+        Classify contribution type of a paper within the session's current graph.
+        Response: {"contribution_type": "Pioneer", "score": 0.81, "confidence": "high", ...}
+        """
+        session_id = session_manager.get_session_id(request)
+        if not session_id:
+            return jsonify({"error": "Session required"}), 401
+
+        allowed, headers = rate_limiter.check_sync(session_id, "GET /api/originality")
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        from backend.db import fetchone
+        from backend.r2_client import R2Client
+        row = fetchone(
+            """
+            SELECT g.graph_json_url FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (session_id,),
+        )
+        if not row:
+            return jsonify({"error": "No graph built yet"}), 404
+
+        try:
+            graph_data = R2Client().download_json(row["graph_json_url"])
+        except Exception:
+            return jsonify({"error": "Could not load graph"}), 500
+
+        mapper = OriginalityMapper()
+        result = mapper.compute_originality(paper_id, graph_data)
+        if result is None:
+            return jsonify({"error": f"Paper {paper_id} not found in current graph"}), 404
+        return jsonify(result.to_dict())
+
+    # ─── GET /api/paradigm/<seed_id> ─────────────────────────────────────────
+
+    @app.route("/api/paradigm/<seed_id>")
+    def api_paradigm(seed_id: str):
+        """
+        Analyse paradigm shift signals for a graph seeded by seed_id.
+        Response: {"stability_score": 72.1, "alert": false, "signals": [...], ...}
+        """
+        session_id = session_manager.get_session_id(request)
+        if not session_id:
+            return jsonify({"error": "Session required"}), 401
+
+        allowed, headers = rate_limiter.check_sync(session_id, "GET /api/paradigm")
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        from backend.db import fetchone
+        from backend.r2_client import R2Client
+        row = fetchone(
+            """
+            SELECT g.graph_json_url, g.coverage_score FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s AND g.seed_paper_id = %s
+            ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (session_id, seed_id),
+        )
+        if not row:
+            return jsonify({"error": "No graph found for this seed paper"}), 404
+
+        try:
+            graph_data = R2Client().download_json(row["graph_json_url"])
+        except Exception:
+            return jsonify({"error": "Could not load graph"}), 500
+
+        detector = ParadigmShiftDetector()
+        result   = detector.detect(
+            graph_json=graph_data,
+            coverage_score=float(row.get("coverage_score") or 0.0),
+        )
+        return jsonify(result.to_dict())
+
+    app.logger.info("Arivu Phase 5 app ready")
     return app
 
 

@@ -1,0 +1,42 @@
+[
+  {
+    "source_id": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+    "target_id": "fa72afa9b2cbc8f0d7b05d52548906f80e3bd5ef",
+    "description": "Attention Is All You Need -> Bahdanau attention (2014)",
+    "expected_mutation_type": "generalization",
+    "expected_similarity_range": [0.55, 1.0],
+    "source": "community_knowledge"
+  },
+  {
+    "source_id": "df2b0e26d0599ce3e70df8a9da02e51594e0e992",
+    "target_id": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+    "description": "BERT -> Attention Is All You Need",
+    "expected_mutation_type": "adoption",
+    "expected_similarity_range": [0.60, 1.0],
+    "source": "community_knowledge"
+  },
+  {
+    "source_id": "2c03df8b48bf3fa39054345bafabfeff15bfd11d",
+    "target_id": "abd1c342495432171beb7ca8fd9551ef13cbd0ff",
+    "description": "ResNet -> AlexNet (deep CNN heritage)",
+    "expected_mutation_type": "generalization",
+    "expected_similarity_range": [0.45, 0.85],
+    "source": "community_knowledge"
+  },
+  {
+    "source_id": "9405cc0d6169988371b2755e573cc28650d14dfe",
+    "target_id": "df2b0e26d0599ce3e70df8a9da02e51594e0e992",
+    "description": "GPT-2 -> BERT (transformer language model)",
+    "expected_mutation_type": "adoption",
+    "expected_similarity_range": [0.55, 0.90],
+    "source": "community_knowledge"
+  },
+  {
+    "source_id": "54e325aee6b2d476bbbb88615ac15e251c6e8214",
+    "target_id": "abd1c342495432171beb7ca8fd9551ef13cbd0ff",
+    "description": "GANs -> AlexNet (discriminator architecture)",
+    "expected_mutation_type": "adoption",
+    "expected_similarity_range": [0.30, 0.70],
+    "source": "community_knowledge"
+  }
+]

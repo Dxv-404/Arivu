@@ -55,6 +55,11 @@ structlog==24.1.0
 python-dotenv==1.0.1
 python-dateutil==2.9.0
 
+# Phase 5 — Export system
+weasyprint==60.2
+matplotlib==3.8.4
+Markdown==3.5.2
+
 # Payments / email (stubs until Phase 6)
 stripe==9.9.0
 resend==2.3.0

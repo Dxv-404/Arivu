@@ -159,3 +159,22 @@ class R2Client:
 
     def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
         self.put(key, data, content_type)
+
+    # ─── Phase 5 §0.4 — presigned URL for export downloads ──────────────
+
+    def presigned_url(self, key: str, expires_in: int = 3600) -> str:
+        """
+        Return a presigned GET URL for `key`. URL expires after `expires_in` seconds.
+        Raises RuntimeError if R2 is not configured.
+        Used by export_generator.py to give the client a time-limited download link.
+        """
+        if not self._enabled or not self._client:
+            raise RuntimeError(
+                "R2 not configured — cannot generate presigned URL. "
+                "Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY in environment."
+            )
+        return self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
