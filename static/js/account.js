@@ -1,6 +1,6 @@
 /**
  * static/js/account.js
- * Account page: profile, password, billing, API keys, GDPR.
+ * Account page: profile, password, API keys, GDPR.
  */
 
 function showMsg(id, text, type = 'success') {
@@ -56,14 +56,7 @@ document.getElementById('change-password-btn')?.addEventListener('click', async 
   }
 });
 
-// ── Billing ────────────────────────────────────────────────────────────────────
-document.getElementById('manage-billing-btn')?.addEventListener('click', async () => {
-  const btn = document.getElementById('manage-billing-btn');
-  btn.disabled = true; btn.textContent = 'Opening portal…';
-  const {ok, data} = await apiPost('/api/billing/portal', {});
-  if (ok && data.url) { window.location.href = data.url; }
-  else { btn.disabled = false; btn.textContent = 'Manage billing (Stripe portal)'; showMsg('gdpr-msg', 'Could not open portal.', 'error'); }
-});
+// Billing section removed — all features free (ADR-016).
 
 // ── API Keys ────────────────────────────────────────────────────────────────────
 async function loadApiKeys() {

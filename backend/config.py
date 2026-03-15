@@ -150,8 +150,8 @@ class Config:
                 logger.warning(f"Config: {var} not set — {msg}")
 
         if cls.ENABLE_AUTH:
+            # STRIPE_SECRET_KEY warning removed — billing dormant (ADR-016).
             for var, msg in {
-                "STRIPE_SECRET_KEY":  "Billing disabled",
                 "RESEND_API_KEY":     "Email disabled — auth emails will fail",
                 "HCAPTCHA_SITE_KEY":  "hCaptcha disabled",
             }.items():

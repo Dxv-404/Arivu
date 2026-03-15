@@ -71,17 +71,15 @@ class TestDecorators:
         finally:
             dec_mod.Config.ENABLE_AUTH = orig
 
-    def test_tier_order_mapping(self):
+    def test_tier_order_mapping_exists(self):
+        """TIER_ORDER dict still exists (dormant) with expected keys."""
         from backend.decorators import TIER_ORDER
-        assert TIER_ORDER["free"] < TIER_ORDER["researcher"] < TIER_ORDER["lab"]
+        assert {"free", "researcher", "lab"} == set(TIER_ORDER.keys())
 
-    def test_check_graph_limit_does_not_increment(self):
-        """check_graph_limit must NOT contain graphs_this_month + 1 — increment is in stream route."""
+    def test_check_graph_limit_is_dormant_but_callable(self):
+        """check_graph_limit exists (dormant) and is callable."""
         from backend.decorators import check_graph_limit
-        source = inspect.getsource(check_graph_limit)
-        assert "graphs_this_month + 1" not in source, (
-            "check_graph_limit still increments — move increment to stream route (§12.2)."
-        )
+        assert callable(check_graph_limit)
 
 
 class TestSessionExpiry:
@@ -109,34 +107,7 @@ class TestGDPR:
         assert url == "https://example.com/dl.zip"
 
 
-class TestBillingWebhook:
-    def test_raises_on_bad_signature(self):
-        from backend.billing import handle_webhook
-        with patch("stripe.Webhook.construct_event", side_effect=Exception("bad sig")):
-            with pytest.raises(Exception):
-                handle_webhook(b"raw", "bad_sig")
-
-    def test_cancellation_sets_expiry_not_immediate_free(self):
-        import time
-        from backend.billing import handle_webhook
-        future_ts = int(time.time()) + 86400 * 15
-        fake_event = {"type": "customer.subscription.deleted",
-                      "data": {"object": {"customer": "cus_test", "current_period_end": future_ts}}}
-        executed_sql = []
-        with (patch("stripe.Webhook.construct_event", return_value=fake_event),
-              patch("backend.billing.db.execute", side_effect=lambda sql, p=(): executed_sql.append(sql)),
-              patch("backend.billing.db.fetchone", return_value=None),
-              patch("backend.billing.Config") as mock_cfg):
-            mock_cfg.STRIPE_SECRET_KEY = "sk_test"
-            mock_cfg.STRIPE_WEBHOOK_SECRET = "whsec"
-            mock_cfg.STRIPE_RESEARCHER_PRICE_ID = "price_r"
-            mock_cfg.STRIPE_LAB_PRICE_ID = "price_l"
-            handle_webhook(b"raw", "sig")
-        for sql in executed_sql:
-            if "UPDATE users" in sql:
-                assert "tier = 'free'" not in sql, (
-                    "Cancellation is immediately downgrading to free — should set tier_expires_at instead."
-                )
+# TestBillingWebhook removed — billing routes removed, billing.py dormant (ADR-016).
 
 
 class TestIndependentDiscoveryTracker:
@@ -272,7 +243,7 @@ class TestAuthRoutes:
 
     def test_login_200(self, client):         assert client.get("/login").status_code == 200
     def test_register_200(self, client):      assert client.get("/register").status_code == 200
-    def test_pricing_200(self, client):       assert client.get("/pricing").status_code == 200
+    def test_pricing_removed(self, client):    assert client.get("/pricing").status_code == 404
     def test_privacy_200(self, client):       assert client.get("/privacy").status_code == 200
     def test_account_requires_auth(self, client): assert client.get("/account").status_code in (200, 301, 302, 401)
     def test_login_rejects_empty(self, client): assert client.post("/login", json={}).status_code in (400, 401)

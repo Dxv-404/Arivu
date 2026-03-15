@@ -152,7 +152,8 @@ class AuthorizationError(ArivuError):
 
 
 class GraphLimitReachedError(ArivuError):
-    """Free user has reached their monthly graph limit."""
+    """DORMANT — kept for spec compliance / portfolio reference. Not raised anywhere.
+    All features are free for authenticated users — no graph limits (ADR-016)."""
     def __init__(self, limit: int, reset_date: str):
         super().__init__(
             message=f"You've used all {limit} graphs for this month",

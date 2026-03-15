@@ -148,12 +148,11 @@ class ArivuRateLimiter:
         "GET /api/living-score":  (30, 60),    # 30/minute — computed from DB
         "GET /api/originality":   (20, 60),    # 20/minute — embedding lookups
         "GET /api/paradigm":      (10, 60),    # 10/minute — heavier computation
-        # Phase 6 — auth + intelligence + billing
+        # Phase 6 — auth + intelligence
         "GET /api/independent-discovery": (5,  60),
         "GET /api/citation-shadow":       (10, 60),
         "GET /api/field-fingerprint":     (10, 60),
         "GET /api/serendipity":           (5,  60),
-        "POST /api/billing/checkout":     (3,  60),
         "POST /api/account/export-data":  (2,  3600),
         "POST /api/account/delete":       (3,  3600),
         "GET /api/account/api-keys":      (20, 60),

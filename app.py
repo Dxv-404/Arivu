@@ -37,8 +37,8 @@ from exceptions import ArivuError, register_error_handlers
 
 # Phase 6 imports
 from backend.auth import auth_bp
-from backend.billing import (create_checkout_session, create_portal_session, handle_webhook)
-from backend.decorators import (require_auth, require_tier, check_graph_limit, get_current_user)
+# billing.py DORMANT — import removed. See DECISIONS.md ADR-016.
+from backend.decorators import (require_auth, get_current_user)
 from backend.gdpr import generate_user_data_export, delete_user_account
 from backend.independent_discovery import IndependentDiscoveryTracker
 from backend.citation_shadow import CitationShadowDetector
@@ -407,15 +407,7 @@ def create_app():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
 
-        # Increment free-tier graph counter (cache miss = actual build = counts against limit)
-        if Config.ENABLE_AUTH:
-            _stream_user = get_current_user()
-            if _stream_user and _stream_user.get("tier") == "free":
-                db.execute(
-                    "UPDATE users SET graphs_this_month = graphs_this_month + 1 "
-                    "WHERE user_id = %s::uuid",
-                    (str(_stream_user["user_id"]),),
-                )
+        # Free-tier graph counter removed — all features free (ADR-016).
 
         # Start background build thread
         def _background_build():
@@ -1256,10 +1248,7 @@ def create_app():
 
     # ── Phase 6: Page Routes ─────────────────────────────────────────────
 
-    @app.route("/pricing")
-    def pricing_page():
-        user = get_current_user()
-        return render_template("pricing.html", user=user)
+    # /pricing route removed — all features free (ADR-016). pricing.html deleted.
 
     @app.route("/account")
     @require_auth
@@ -1309,59 +1298,19 @@ def create_app():
     def api_usage():
         user = g.user
         return jsonify({
-            "tier":              user.get("tier", "free"),
+            "tier":              user.get("tier", "researcher"),
             "graphs_this_month": user.get("graphs_this_month", 0),
-            "limit":             10 if user.get("tier") == "free" else None,
-            "reset_at":          str(user.get("usage_reset_at", "")),
+            "limit":             None,  # All features free — no graph limits (ADR-016)
+            "reset_at":          None,
         })
 
-    # ── Phase 6: Billing Routes ──────────────────────────────────────────
-
-    @app.route("/api/billing/checkout", methods=["POST"])
-    @require_auth
-    def api_billing_checkout():
-        if not Config.stripe_enabled():
-            return jsonify({"error": "Billing not configured"}), 503
-        data = request.get_json(silent=True) or {}
-        tier = data.get("tier", "")
-        if tier not in ("researcher", "lab"):
-            return jsonify({"error": "Invalid tier"}), 400
-        try:
-            url = create_checkout_session(g.user_id, g.user.get("email", ""), tier)
-            return jsonify({"url": url})
-        except Exception as exc:
-            app.logger.error(f"Checkout session failed: {exc}")
-            return jsonify({"error": "Could not create checkout session"}), 500
-
-    @app.route("/api/billing/portal", methods=["POST"])
-    @require_auth
-    def api_billing_portal():
-        if not Config.stripe_enabled():
-            return jsonify({"error": "Billing not configured"}), 503
-        try:
-            url = create_portal_session(g.user_id)
-            return jsonify({"url": url})
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 400
-
-    @app.route("/webhooks/stripe", methods=["POST"])
-    def stripe_webhook():
-        raw_body  = request.data      # MUST use .data, not .json — for signature verification
-        signature = request.headers.get("Stripe-Signature", "")
-        if not Config.stripe_enabled():
-            return jsonify({"error": "Billing not configured"}), 503
-        try:
-            result = handle_webhook(raw_body, signature)
-            return jsonify(result)
-        except Exception as exc:
-            app.logger.warning(f"Stripe webhook failed: {exc}")
-            return jsonify({"error": "Webhook processing failed"}), 400
+    # Billing routes removed — all features free (ADR-016).
+    # billing.py kept DORMANT for portfolio reference.
 
     # ── Phase 6: API Key Routes ──────────────────────────────────────────
 
     @app.route("/api/account/api-keys", methods=["GET"])
     @require_auth
-    @require_tier("lab")
     def api_list_api_keys():
         rows = db.fetchall(
             """
@@ -1375,7 +1324,6 @@ def create_app():
 
     @app.route("/api/account/api-keys", methods=["POST"])
     @require_auth
-    @require_tier("lab")
     def api_create_api_key():
         import hashlib, secrets as _secrets
         data      = request.get_json(silent=True) or {}
@@ -1392,7 +1340,6 @@ def create_app():
 
     @app.route("/api/account/api-keys/<key_id>", methods=["DELETE"])
     @require_auth
-    @require_tier("lab")
     def api_revoke_api_key(key_id: str):
         db.execute(
             "UPDATE api_keys SET revoked_at = NOW() WHERE key_id = %s::uuid AND user_id = %s::uuid",
@@ -1510,7 +1457,6 @@ def create_app():
 
     @app.route("/api/field-fingerprint/<seed_id>")
     @require_auth
-    @require_tier("researcher")
     def api_field_fingerprint(seed_id: str):
         session_id = session_manager.get_session_id(request)
         allowed, headers = rate_limiter.check_sync(
@@ -1546,7 +1492,6 @@ def create_app():
 
     @app.route("/api/serendipity/<paper_id>")
     @require_auth
-    @require_tier("researcher")
     def api_serendipity(paper_id: str):
         session_id = session_manager.get_session_id(request)
         allowed, headers = rate_limiter.check_sync(
@@ -1568,7 +1513,6 @@ def create_app():
 
     @app.route("/api/graphs/history")
     @require_auth
-    @require_tier("researcher")
     def api_graph_history():
         rows = db.fetchall(
             """
@@ -1581,7 +1525,6 @@ def create_app():
 
     @app.route("/api/graph-memory")
     @require_auth
-    @require_tier("researcher")
     def api_get_graph_memory():
         graph_id = request.args.get("graph_id", "").strip()
         if not graph_id:
@@ -1594,7 +1537,6 @@ def create_app():
 
     @app.route("/api/graph-memory", methods=["POST"])
     @require_auth
-    @require_tier("researcher")
     def api_save_graph_memory():
         import json as _json
         data     = request.get_json(silent=True) or {}

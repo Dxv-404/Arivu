@@ -4,19 +4,7 @@
 <div class="account-page">
   <div class="account-header">
     <h1>Account settings</h1>
-    <span class="tier-badge tier-badge--{{ user.tier }}">{{ user.tier | capitalize }} plan</span>
   </div>
-
-  {% if user.tier == 'free' %}
-  <section class="account-section" id="usage-section">
-    <h2>Usage this month</h2>
-    <div class="usage-meter">
-      <div class="usage-bar"><div class="usage-fill" style="width:{{ (user.graphs_this_month / 10 * 100) | int }}%"></div></div>
-      <span class="usage-label">{{ user.graphs_this_month }} / 10 graphs used — resets {{ user.usage_reset_at.strftime('%b') }} {{ user.usage_reset_at.day if user.usage_reset_at else '' }}</span>
-    </div>
-    <a href="/pricing" class="btn-primary btn-sm" style="margin-top:0.75rem">Upgrade to Researcher — unlimited graphs</a>
-  </section>
-  {% endif %}
 
   <section class="account-section" id="profile-section">
     <h2>Profile</h2>
@@ -51,21 +39,9 @@
     <button class="btn-primary btn-sm" id="change-password-btn">Change password</button>
   </section>
 
-  <section class="account-section" id="billing-section">
-    <h2>Billing</h2>
-    {% if user.tier == 'free' %}
-      <p>You're on the <strong>Free</strong> plan.</p>
-      <a href="/pricing" class="btn-primary btn-sm">View upgrade options</a>
-    {% else %}
-      <p>You're on the <strong>{{ user.tier | capitalize }}</strong> plan.{% if user.tier_expires_at %} Renews {{ user.tier_expires_at.strftime('%b') }} {{ user.tier_expires_at.day }}, {{ user.tier_expires_at.year }}.{% endif %}</p>
-      <button class="btn-secondary btn-sm" id="manage-billing-btn">Manage billing (Stripe portal)</button>
-    {% endif %}
-  </section>
-
-  {% if user.tier == 'lab' %}
   <section class="account-section" id="api-keys-section">
     <h2>API keys</h2>
-    <p class="section-note">Lab tier only. Keys grant programmatic access to Arivu's API.</p>
+    <p class="section-note">Keys grant programmatic access to Arivu's API.</p>
     <div id="api-key-msg" class="account-msg" hidden></div>
     <div id="api-keys-list" class="api-keys-list"><p class="loading-text">Loading keys…</p></div>
     <div class="form-row">
@@ -78,7 +54,6 @@
       <button onclick="navigator.clipboard.writeText(document.getElementById('new-key-value').textContent).then(()=>this.textContent='Copied!')" class="btn-ghost btn-sm">Copy</button>
     </div>
   </section>
-  {% endif %}
 
   <section class="account-section account-section--danger" id="data-section">
     <h2>Your data</h2>

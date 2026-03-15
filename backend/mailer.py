@@ -82,8 +82,8 @@ def send_welcome_email(email: str, display_name: str) -> bool:
     name = display_name or "there"
     text = (
         f"Hi {name},\n\nYour account is ready. A few things worth knowing:\n\n"
-        f"1. Free accounts can build 10 graphs per month.\n"
-        f"2. Every graph is cached — re-visiting the same paper is instant and free.\n"
+        f"1. All features are free — build unlimited graphs.\n"
+        f"2. Every graph is cached — re-visiting the same paper is instant.\n"
         f"3. Try 'Attention Is All You Need' first — it's precomputed and loads immediately.\n"
         f"4. The pruning animation is the best entry point. Click any node in the graph.\n\n"
         f"If you have questions, reply to this email.\n\n— Dev"
@@ -92,7 +92,7 @@ def send_welcome_email(email: str, display_name: str) -> bool:
 <html><body style="font-family:sans-serif;max-width:600px;margin:40px auto;color:#1a1a2e">
 <h2 style="color:#D4A843">Welcome to Arivu, {name}!</h2>
 <ol>
-  <li>Free accounts: <strong>10 graphs per month</strong>. Cached graphs are free.</li>
+  <li>All features are free — <strong>unlimited graphs</strong>.</li>
   <li>Try <em>"Attention Is All You Need"</em> first — it's precomputed.</li>
   <li>Click any node in the graph to trigger the pruning animation.</li>
 </ol>

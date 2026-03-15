@@ -1,12 +1,13 @@
 """
 backend/decorators.py — Flask route decorators for auth, tier gating, usage limits.
 
-IMPORTANT: check_graph_limit only CHECKS the limit. It does NOT increment
-graphs_this_month. The increment happens in the stream route AFTER a cache miss
-is confirmed. This prevents charged usage for free cache-hit graph loads.
+BILLING REMOVAL NOTE (2026-03-16):
+All features are free for authenticated users. require_tier() and check_graph_limit()
+are DORMANT — kept for spec compliance / portfolio reference but never applied to routes.
+The usage-reset block in get_current_user() has been removed. New users register as
+tier='researcher' so any residual tier checks pass. See DECISIONS.md ADR-016.
 """
 import logging
-from datetime import datetime, timezone
 from functools import wraps
 
 from flask import g, jsonify, request
@@ -49,14 +50,8 @@ def get_current_user():
             "last_seen = NOW() WHERE session_id = %s",
             (session_id,),
         )
-        if row.get("usage_reset_at") and datetime.now(timezone.utc) > row["usage_reset_at"]:
-            db.execute(
-                "UPDATE users SET graphs_this_month = 0, "
-                "usage_reset_at = DATE_TRUNC('month', NOW()) + INTERVAL '1 month' "
-                "WHERE user_id = %s",
-                (row["user_id"],),
-            )
-            row["graphs_this_month"] = 0
+        # Usage-reset block removed — all features free, no monthly graph limits.
+        # See DECISIONS.md ADR-016.
 
     g._current_user = row
     return row
@@ -93,7 +88,10 @@ def require_auth(f):
 
 def require_tier(minimum_tier: str):
     """
-    Require user to have at least minimum_tier. Must follow @require_auth.
+    DORMANT — kept for spec compliance / portfolio reference. Not applied to any route.
+    All features are free for authenticated users (ADR-016).
+
+    Original: Require user to have at least minimum_tier. Must follow @require_auth.
     TIER_ORDER: free=0, researcher=1, lab=2.
     @require_tier("researcher") allows both researcher AND lab.
     """
@@ -126,11 +124,11 @@ def require_tier(minimum_tier: str):
 
 def check_graph_limit(f):
     """
-    For free-tier users: check 10 graphs/month limit and return 429 if exceeded.
+    DORMANT — kept for spec compliance / portfolio reference. Not applied to any route.
+    All features are free for authenticated users — no graph build limits (ADR-016).
 
+    Original: For free-tier users: check 10 graphs/month limit and return 429 if exceeded.
     DOES NOT INCREMENT — increment happens in the stream route after cache miss.
-    Researcher/Lab users pass through with no limit check.
-    Anonymous users (no g.user) pass through — they are rate-limited by rate_limiter.py.
     """
     @wraps(f)
     def decorated(*args, **kwargs):

@@ -55,24 +55,7 @@ def run():
             except Exception as exc:
                 logger.error(f"  Deletion error for user_id={uid}: {exc}")
 
-    n = db.execute(
-        """
-        UPDATE users SET graphs_this_month = 0,
-          usage_reset_at = DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
-        WHERE usage_reset_at < NOW() AND tier = 'free'
-        """
-    )
-    logger.info(f"  Reset monthly graph counters for {n} free-tier users")
-
-    n = db.execute(
-        """
-        UPDATE users SET tier = 'free', tier_expires_at = NULL
-        WHERE tier != 'free'
-          AND tier_expires_at IS NOT NULL
-          AND tier_expires_at < NOW()
-        """
-    )
-    logger.info(f"  Downgraded {n} users with expired paid tiers to free")
+    # Usage-reset and tier-downgrade blocks removed — all features free (ADR-016).
 
     logger.info("Nightly maintenance complete.")
 

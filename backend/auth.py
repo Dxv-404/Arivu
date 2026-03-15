@@ -190,8 +190,8 @@ def register():
     hashed = _hash_password(password)
     row    = db.execute_returning(
         """
-        INSERT INTO users (email, password_hash, display_name, institution, email_verified)
-        VALUES (%s, %s, %s, %s, FALSE)
+        INSERT INTO users (email, password_hash, display_name, institution, email_verified, tier)
+        VALUES (%s, %s, %s, %s, FALSE, 'researcher')
         RETURNING user_id
         """,
         (email, hashed, display_name or None, institution or None),
