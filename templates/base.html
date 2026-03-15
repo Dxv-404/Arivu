@@ -14,10 +14,11 @@
   <!-- Content Security Policy -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
-                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://js.hcaptcha.com https://newassets.hcaptcha.com;
                  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                  font-src https://fonts.gstatic.com;
-                 connect-src 'self' https://api.semantic-scholar.org;
+                 connect-src 'self' https://api.semantic-scholar.org https://hcaptcha.com https://*.hcaptcha.com;
+                 frame-src https://newassets.hcaptcha.com https://hcaptcha.com;
                  img-src 'self' data: https:;">
 
   <!-- Fonts -->
@@ -33,12 +34,83 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/graph.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/panels.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/loading.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
 
   {% block head %}{% endblock %}
 </head>
 <body class="dark">
+  <nav class="site-nav" role="navigation" aria-label="Main navigation">
+    <a href="/" class="nav-logo" aria-label="Arivu home">Arivu</a>
+    <div class="nav-links">
+      <a href="/explore" class="nav-link">Explore</a>
+      <a href="/pricing" class="nav-link">Pricing</a>
+    </div>
+    <div class="nav-auth">
+      {% if g.user %}
+        <span class="nav-tier-badge nav-tier-{{ g.user.tier }}">{{ g.user.tier | capitalize }}</span>
+        <a href="/account" class="nav-link nav-link--account">{{ g.user.display_name or g.user.email.split('@')[0] }}</a>
+        <button class="btn-ghost btn-sm nav-logout" id="nav-logout-btn">Log out</button>
+      {% else %}
+        <a href="/login"    class="btn-ghost btn-sm">Log in</a>
+        <a href="/register" class="btn-primary btn-sm">Sign up free</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  {% if g.user and g.user.tier == 'free' %}
+  <div class="upgrade-nudge" id="upgrade-nudge" hidden>
+    <span>{{ g.user.graphs_this_month }} / 10 graphs used this month. <a href="/pricing">Upgrade for unlimited →</a></span>
+    <button onclick="document.getElementById('upgrade-nudge').hidden=true" aria-label="Dismiss" class="nudge-dismiss">✕</button>
+  </div>
+  {% endif %}
+
   {% block body %}{% endblock %}
 
+  {% block content %}{% endblock %}
+
   {% block scripts %}{% endblock %}
+
+  <!-- Cookie consent banner -->
+  <div id="cookie-banner" class="cookie-banner" role="dialog"
+       aria-labelledby="cookie-banner-title" hidden>
+    <p id="cookie-banner-title">
+      Arivu uses one cookie to keep you logged in. <a href="/privacy">Learn more</a>
+    </p>
+    <div class="cookie-actions">
+      <button id="cookie-accept-all" class="btn-primary btn-sm">Accept</button>
+      <button id="cookie-necessary" class="btn-ghost btn-sm">Necessary only</button>
+    </div>
+  </div>
+
+  <script>
+  document.getElementById('nav-logout-btn')?.addEventListener('click', async () => {
+    await fetch('/logout', { method: 'POST' });
+    window.location.href = '/';
+  });
+  {% if g.user and g.user.tier == 'free' and g.user.graphs_this_month >= 8 %}
+    document.getElementById('upgrade-nudge').hidden = false;
+  {% endif %}
+
+  (function() {
+    const consent = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('cookie_consent='));
+    if (!consent) document.getElementById('cookie-banner').hidden = false;
+
+    function setConsent(type) {
+      const expires  = new Date(Date.now() + 365*24*60*60*1000).toUTCString();
+      const isHttps  = location.protocol === 'https:';
+      const secure   = isHttps ? '; Secure' : '';
+      document.cookie = `cookie_consent=${type}; expires=${expires}; path=/; SameSite=Lax${secure}`;
+      document.getElementById('cookie-banner').hidden = true;
+      fetch('/api/consent', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({consent_type: type}),
+      });
+    }
+
+    document.getElementById('cookie-accept-all')?.addEventListener('click', () => setConsent('all'));
+    document.getElementById('cookie-necessary')?.addEventListener('click',  () => setConsent('necessary'));
+  })();
+  </script>
 </body>
 </html>

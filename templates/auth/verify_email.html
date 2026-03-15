@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Verify email — Arivu{% endblock %}
+{% block content %}
+<div class="auth-container"><div class="auth-card">
+  <div class="auth-header">
+    <a href="/" class="auth-logo">Arivu</a>
+    {% if status == "missing" %}<h1>No token provided</h1><p class="auth-subhead">The verification link appears incomplete.</p>
+    {% elif status == "invalid" %}<h1>Invalid link</h1><p class="auth-subhead">This link doesn't exist or was already used.</p>
+    {% elif status == "already_used" %}<h1>Already verified</h1><p class="auth-subhead">This link was already used. Your account is verified.</p>
+    {% elif status == "expired" %}<h1>Link expired</h1><p class="auth-subhead">Verification links expire after 24 hours.</p>
+    {% else %}<h1>Something went wrong</h1><p class="auth-subhead">Please try again.</p>{% endif %}
+  </div>
+  {% if status == "already_used" %}
+    <a href="/login" class="btn-primary btn-full">Log in</a>
+  {% elif status == "expired" %}
+    <div id="resend-msg" class="auth-success" hidden></div>
+    <button class="btn-primary btn-full" id="resend-btn">Send new verification email</button>
+    <p class="auth-footer" style="margin-top:1rem"><a href="/login">Back to log in</a></p>
+    <script>
+    document.getElementById('resend-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('resend-btn');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      const email = prompt('Enter your email address:');
+      if (!email) { btn.disabled = false; btn.textContent = 'Send new verification email'; return; }
+      await fetch('/resend-verification', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+      btn.disabled = false; btn.textContent = 'Send new verification email';
+      const msg = document.getElementById('resend-msg');
+      msg.textContent = 'If that email is registered and unverified, a new link is on its way.';
+      msg.hidden = false;
+    });
+    </script>
+  {% else %}
+    <a href="/register" class="btn-primary btn-full">Create new account</a>
+    <p class="auth-footer" style="margin-top:1rem"><a href="/login">Back to log in</a></p>
+  {% endif %}
+</div></div>
+{% endblock %}

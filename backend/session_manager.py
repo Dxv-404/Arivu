@@ -53,13 +53,17 @@ class SessionManager:
 
     def get_session(self, session_id: str) -> bool:
         """
-        Validate that session_id exists in the DB and update last_seen.
-        Returns True if valid, False if not.
+        Validate session_id exists and has not expired.
+        Phase 6: now checks expires_at column added in §0.1 migration.
         """
         if not session_id or len(session_id) > 64:
             return False
         row = db.fetchone(
-            "SELECT session_id FROM sessions WHERE session_id = %s",
+            """
+            SELECT session_id FROM sessions
+            WHERE session_id = %s
+              AND (expires_at IS NULL OR expires_at > NOW())
+            """,
             (session_id,),
         )
         if not row:

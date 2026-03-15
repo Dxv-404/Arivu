@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy — Arivu{% endblock %}
+{% block content %}
+<div class="legal-page">
+  <h1>Privacy Policy</h1>
+  <p class="legal-date">Effective date: March 2026</p>
+  <h2>What we collect and why</h2>
+  <p>When you create an account, we collect your email address and password hash (bcrypt, 12 rounds — we never store your plain password). We collect session data (session ID, IP address, user agent) to keep you logged in and detect abuse. We log actions you take (which papers you analyze, pruning operations) for 90 days.</p>
+  <h2>Third-party processors</h2>
+  <ul>
+    <li><strong>Neon.tech</strong> — PostgreSQL database</li>
+    <li><strong>Cloudflare R2</strong> — object storage for graphs and exports</li>
+    <li><strong>Koyeb</strong> — backend hosting</li>
+    <li><strong>Stripe</strong> — payment processing (we never see your card number)</li>
+    <li><strong>Resend</strong> — transactional email</li>
+    <li><strong>Groq</strong> — LLM API (paper abstracts only — never personal data)</li>
+    <li><strong>hCaptcha</strong> — bot protection on login and registration</li>
+  </ul>
+  <h2>Data retention</h2>
+  <table class="retention-table">
+    <thead><tr><th>Data</th><th>Retention</th><th>Legal basis</th></tr></thead>
+    <tbody>
+      <tr><td>Account (email, name)</td><td>Account lifetime + 30 days</td><td>Contract</td></tr>
+      <tr><td>Sessions</td><td>30 days or until logout</td><td>Legitimate interest</td></tr>
+      <tr><td>Action log</td><td>90 days</td><td>Legitimate interest</td></tr>
+      <tr><td>Password reset tokens</td><td>7 days after use/expiry</td><td>Contract</td></tr>
+    </tbody>
+  </table>
+  <h2>Your rights</h2>
+  <p>Access, rectification, erasure, portability, restriction, and objection. Exercise these from <a href="/account">your account settings</a> or email <strong>privacy@arivu.app</strong>. Account deletion requests are processed within 24 hours.</p>
+  <h2>Cookies</h2>
+  <p>We use one cookie: <code>arivu_session</code> — strictly necessary for keeping you logged in. HTTP-only, Secure, SameSite=Lax. No tracking cookies. No advertising cookies.</p>
+  <h2>Contact</h2>
+  <p>Data controller: Dev (Arivu). Contact: <strong>privacy@arivu.app</strong></p>
+</div>
+{% endblock %}

@@ -9,7 +9,7 @@ import uuid
 from threading import Thread
 from typing import Optional
 
-from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, g, jsonify, make_response, render_template, request, stream_with_context
 from flask_cors import CORS
 
 from backend.config import Config, config
@@ -34,6 +34,16 @@ from backend.living_paper_scorer import LivingPaperScorer
 from backend.originality_mapper import OriginalityMapper
 from backend.paradigm_detector import ParadigmShiftDetector
 from exceptions import ArivuError, register_error_handlers
+
+# Phase 6 imports
+from backend.auth import auth_bp
+from backend.billing import (create_checkout_session, create_portal_session, handle_webhook)
+from backend.decorators import (require_auth, require_tier, check_graph_limit, get_current_user)
+from backend.gdpr import generate_user_data_export, delete_user_account
+from backend.independent_discovery import IndependentDiscoveryTracker
+from backend.citation_shadow import CitationShadowDetector
+from backend.field_fingerprint import FieldFingerprintAnalyzer
+from backend.serendipity_engine import SerendipityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +215,19 @@ def create_app():
     app.logger.info("Database pool ready")
 
     register_error_handlers(app)
+
+    # Phase 6: Register auth blueprint
+    app.register_blueprint(auth_bp)
+
+    # Phase 6: Initialize Resend once at startup
+    from backend.mailer import _init_resend
+    _init_resend()
+
+    # Phase 6: Inject current user into all templates
+    @app.before_request
+    def _inject_user():
+        from backend.decorators import get_current_user
+        g.user = get_current_user() if Config.ENABLE_AUTH else None
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -384,6 +407,16 @@ def create_app():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
 
+        # Increment free-tier graph counter (cache miss = actual build = counts against limit)
+        if Config.ENABLE_AUTH:
+            _stream_user = get_current_user()
+            if _stream_user and _stream_user.get("tier") == "free":
+                db.execute(
+                    "UPDATE users SET graphs_this_month = graphs_this_month + 1 "
+                    "WHERE user_id = %s::uuid",
+                    (str(_stream_user["user_id"]),),
+                )
+
         # Start background build thread
         def _background_build():
             engine = AncestryGraph()
@@ -393,6 +426,21 @@ def create_app():
                     "UPDATE build_jobs SET status = 'done' WHERE job_id = %s",
                     (job_id,),
                 )
+                # Link graph to authenticated user (enables persistent history)
+                if Config.ENABLE_AUTH:
+                    _link_user = get_current_user()
+                    if _link_user:
+                        # Find the graph_id created by this build
+                        _built_graph = db.fetchone(
+                            "SELECT graph_id FROM graphs WHERE seed_paper_id = %s "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (paper_id,),
+                        )
+                        if _built_graph:
+                            db.execute(
+                                "UPDATE graphs SET user_id = %s::uuid WHERE graph_id = %s",
+                                (str(_link_user["user_id"]), _built_graph["graph_id"]),
+                            )
             except Exception as e:
                 app.logger.error(f"Background build failed for job {job_id}: {e}", exc_info=True)
                 db.execute(
@@ -1172,7 +1220,405 @@ def create_app():
         )
         return jsonify(result.to_dict())
 
-    app.logger.info("Arivu Phase 5 app ready")
+    # ── Phase 6: Helper ──────────────────────────────────────────────────
+
+    def _get_latest_graph_json(session_id: str, user_id: str | None = None) -> dict | None:
+        """
+        Fetch the latest graph JSON for a request.
+        Priority: session_id → user_id fallback.
+        Returns parsed graph dict, or None if not found.
+        Raises RuntimeError if R2 download fails.
+        """
+        from backend.r2_client import R2Client
+
+        row = None
+        if session_id:
+            row = db.fetchone(
+                """
+                SELECT g.graph_json_url FROM graphs g
+                JOIN session_graphs sg ON sg.graph_id = g.graph_id
+                WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1
+                """,
+                (session_id,),
+            )
+        if not row and user_id:
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE user_id = %s::uuid "
+                "ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            )
+        if not row:
+            return None
+        try:
+            return R2Client().download_json(row["graph_json_url"])
+        except Exception as exc:
+            raise RuntimeError(f"R2 download failed: {exc}") from exc
+
+    # ── Phase 6: Page Routes ─────────────────────────────────────────────
+
+    @app.route("/pricing")
+    def pricing_page():
+        user = get_current_user()
+        return render_template("pricing.html", user=user)
+
+    @app.route("/account")
+    @require_auth
+    def account_page():
+        return render_template("account.html", user=g.user)
+
+    @app.route("/privacy")
+    def privacy_page():
+        return render_template("privacy.html")
+
+    # ── Phase 6: Account API Routes ──────────────────────────────────────
+
+    @app.route("/api/account/profile", methods=["POST"])
+    @require_auth
+    def api_update_profile():
+        data = request.get_json(silent=True) or {}
+        if "email" in data:
+            return jsonify({"error": "email_change_not_supported",
+                            "message": "Email change is not available. Contact privacy@arivu.app."}), 400
+        display_name = (data.get("display_name") or "").strip()[:100]
+        institution  = (data.get("institution") or "").strip()[:200]
+        role         = (data.get("role") or "").strip()[:50]
+        db.execute(
+            "UPDATE users SET display_name = %s, institution = %s, role = %s WHERE user_id = %s::uuid",
+            (display_name or None, institution or None, role or None, g.user_id),
+        )
+        return jsonify({"success": True})
+
+    @app.route("/api/account/password", methods=["POST"])
+    @require_auth
+    def api_change_password():
+        import bcrypt as _bcrypt
+        data       = request.get_json(silent=True) or {}
+        current_pw = data.get("current_password", "")
+        new_pw     = data.get("new_password", "")
+        if len(new_pw) < 8:
+            return jsonify({"error": "password_too_short"}), 400
+        user = db.fetchone("SELECT password_hash FROM users WHERE user_id = %s::uuid", (g.user_id,))
+        if not _bcrypt.checkpw(current_pw.encode(), (user or {}).get("password_hash", "").encode()):
+            return jsonify({"error": "wrong_current_password"}), 403
+        new_hash = _bcrypt.hashpw(new_pw.encode(), _bcrypt.gensalt(rounds=12)).decode()
+        db.execute("UPDATE users SET password_hash = %s WHERE user_id = %s::uuid", (new_hash, g.user_id))
+        return jsonify({"success": True})
+
+    @app.route("/api/usage")
+    @require_auth
+    def api_usage():
+        user = g.user
+        return jsonify({
+            "tier":              user.get("tier", "free"),
+            "graphs_this_month": user.get("graphs_this_month", 0),
+            "limit":             10 if user.get("tier") == "free" else None,
+            "reset_at":          str(user.get("usage_reset_at", "")),
+        })
+
+    # ── Phase 6: Billing Routes ──────────────────────────────────────────
+
+    @app.route("/api/billing/checkout", methods=["POST"])
+    @require_auth
+    def api_billing_checkout():
+        if not Config.stripe_enabled():
+            return jsonify({"error": "Billing not configured"}), 503
+        data = request.get_json(silent=True) or {}
+        tier = data.get("tier", "")
+        if tier not in ("researcher", "lab"):
+            return jsonify({"error": "Invalid tier"}), 400
+        try:
+            url = create_checkout_session(g.user_id, g.user.get("email", ""), tier)
+            return jsonify({"url": url})
+        except Exception as exc:
+            app.logger.error(f"Checkout session failed: {exc}")
+            return jsonify({"error": "Could not create checkout session"}), 500
+
+    @app.route("/api/billing/portal", methods=["POST"])
+    @require_auth
+    def api_billing_portal():
+        if not Config.stripe_enabled():
+            return jsonify({"error": "Billing not configured"}), 503
+        try:
+            url = create_portal_session(g.user_id)
+            return jsonify({"url": url})
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.route("/webhooks/stripe", methods=["POST"])
+    def stripe_webhook():
+        raw_body  = request.data      # MUST use .data, not .json — for signature verification
+        signature = request.headers.get("Stripe-Signature", "")
+        if not Config.stripe_enabled():
+            return jsonify({"error": "Billing not configured"}), 503
+        try:
+            result = handle_webhook(raw_body, signature)
+            return jsonify(result)
+        except Exception as exc:
+            app.logger.warning(f"Stripe webhook failed: {exc}")
+            return jsonify({"error": "Webhook processing failed"}), 400
+
+    # ── Phase 6: API Key Routes ──────────────────────────────────────────
+
+    @app.route("/api/account/api-keys", methods=["GET"])
+    @require_auth
+    @require_tier("lab")
+    def api_list_api_keys():
+        rows = db.fetchall(
+            """
+            SELECT key_id::text, key_prefix, label, scopes, created_at, last_used_at
+            FROM api_keys WHERE user_id = %s::uuid AND revoked_at IS NULL
+            ORDER BY created_at DESC
+            """,
+            (g.user_id,),
+        )
+        return jsonify({"keys": [dict(r) for r in rows]})
+
+    @app.route("/api/account/api-keys", methods=["POST"])
+    @require_auth
+    @require_tier("lab")
+    def api_create_api_key():
+        import hashlib, secrets as _secrets
+        data      = request.get_json(silent=True) or {}
+        label     = (data.get("label") or "").strip()[:100]
+        raw_key   = "ak_" + _secrets.token_hex(32)
+        key_hash  = hashlib.sha256(raw_key.encode()).hexdigest()
+        key_prefix = raw_key[:8]    # 8 chars as documented in schema
+        db.execute(
+            "INSERT INTO api_keys (user_id, key_hash, key_prefix, label) VALUES (%s::uuid, %s, %s, %s)",
+            (g.user_id, key_hash, key_prefix, label or None),
+        )
+        return jsonify({"key": raw_key, "prefix": key_prefix, "label": label,
+                        "note": "Copy this key — it will never be shown again."})
+
+    @app.route("/api/account/api-keys/<key_id>", methods=["DELETE"])
+    @require_auth
+    @require_tier("lab")
+    def api_revoke_api_key(key_id: str):
+        db.execute(
+            "UPDATE api_keys SET revoked_at = NOW() WHERE key_id = %s::uuid AND user_id = %s::uuid",
+            (key_id, g.user_id),
+        )
+        return jsonify({"success": True})
+
+    # ── Phase 6: GDPR Routes ────────────────────────────────────────────
+
+    @app.route("/api/account/export-data", methods=["POST"])
+    @require_auth
+    def api_request_data_export():
+        from backend.mailer import send_data_export_ready
+        try:
+            url = generate_user_data_export(g.user_id)
+            send_data_export_ready(g.user.get("email", ""), g.user.get("display_name", ""), url)
+            return jsonify({"success": True,
+                            "message": "Your data export is ready. Check your email for the download link."})
+        except Exception as exc:
+            app.logger.error(f"Data export failed: {exc}")
+            return jsonify({"error": "Export generation failed"}), 500
+
+    @app.route("/api/account/delete", methods=["POST"])
+    @require_auth
+    def api_delete_account():
+        import bcrypt as _bcrypt
+        data         = request.get_json(silent=True) or {}
+        confirmation = data.get("confirmation", "")
+        password     = data.get("password", "")
+
+        if confirmation != "DELETE MY ACCOUNT":
+            return jsonify({"error": "confirmation_mismatch",
+                            "message": "Type 'DELETE MY ACCOUNT' to confirm."}), 400
+
+        user = db.fetchone("SELECT password_hash FROM users WHERE user_id = %s::uuid", (g.user_id,))
+        if not _bcrypt.checkpw(password.encode(), (user or {}).get("password_hash", "").encode()):
+            return jsonify({"error": "wrong_password"}), 403
+
+        from backend.mailer import send_account_deletion_confirmation
+        email = g.user.get("email", "")
+        name  = g.user.get("display_name", "")
+
+        success = delete_user_account(g.user_id)
+        if success:
+            if email and not email.startswith("deleted_"):
+                send_account_deletion_confirmation(email, name)
+            resp = make_response(jsonify({"success": True, "redirect": "/"}))
+            resp.delete_cookie("arivu_session")
+            return resp
+        return jsonify({"error": "Account deletion failed — try again or contact support."}), 500
+
+    # ── Phase 6: Consent Route ───────────────────────────────────────────
+
+    @app.route("/api/consent", methods=["POST"])
+    def api_consent():
+        data         = request.get_json(silent=True) or {}
+        consent_type = data.get("consent_type", "necessary")
+        if consent_type not in ("all", "necessary"):
+            return jsonify({"error": "Invalid consent_type"}), 400
+        ip         = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        session_id = request.cookies.get("arivu_session", "")
+        user       = get_current_user()
+        user_id    = str(user["user_id"]) if user else None
+        db.execute(
+            "INSERT INTO consent_log (user_id, session_id, consent_type, ip_address) "
+            "VALUES (%s::uuid, %s, %s, %s::inet)",
+            (user_id, session_id or None, consent_type, ip or None),
+        )
+        if user_id:
+            db.execute(
+                "UPDATE users SET marketing_consent = %s WHERE user_id = %s::uuid",
+                (consent_type == "all", user_id),
+            )
+        return jsonify({"success": True})
+
+    # ── Phase 6: Intelligence Routes ─────────────────────────────────────
+
+    @app.route("/api/independent-discovery")
+    @require_auth
+    def api_independent_discovery():
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or getattr(g, "user_id", "anon"), "GET /api/independent-discovery"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        try:
+            graph_data = _get_latest_graph_json(session_id, getattr(g, "user_id", None))
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if graph_data is None:
+            return jsonify({"error": "No graph built yet. Build a graph first."}), 404
+        tracker = IndependentDiscoveryTracker()
+        pairs   = tracker.find_independent_discoveries(graph_data)
+        return jsonify({"pairs": [p.to_dict() for p in pairs]})
+
+    @app.route("/api/citation-shadow")
+    @require_auth
+    def api_citation_shadow():
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or getattr(g, "user_id", "anon"), "GET /api/citation-shadow"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        try:
+            graph_data = _get_latest_graph_json(session_id, getattr(g, "user_id", None))
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if graph_data is None:
+            return jsonify({"error": "No graph built yet."}), 404
+        detector = CitationShadowDetector()
+        shadows  = detector.detect_shadows(graph_data)
+        return jsonify({"shadows": [s.to_dict() for s in shadows]})
+
+    @app.route("/api/field-fingerprint/<seed_id>")
+    @require_auth
+    @require_tier("researcher")
+    def api_field_fingerprint(seed_id: str):
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or getattr(g, "user_id", "anon"), "GET /api/field-fingerprint"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        row = db.fetchone(
+            """
+            SELECT g.graph_json_url FROM graphs g
+            JOIN session_graphs sg ON sg.graph_id = g.graph_id
+            WHERE sg.session_id = %s AND g.seed_paper_id = %s
+            ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (session_id, seed_id),
+        )
+        if not row and getattr(g, "user_id", None):
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE user_id = %s::uuid AND seed_paper_id = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (g.user_id, seed_id),
+            )
+        if not row:
+            return jsonify({"error": "No graph found for this seed paper"}), 404
+        try:
+            from backend.r2_client import R2Client
+            graph_data = R2Client().download_json(row["graph_json_url"])
+        except Exception:
+            return jsonify({"error": "Could not load graph"}), 500
+        analyzer    = FieldFingerprintAnalyzer()
+        fingerprint = analyzer.analyze(graph_data)
+        return jsonify(fingerprint.to_dict())
+
+    @app.route("/api/serendipity/<paper_id>")
+    @require_auth
+    @require_tier("researcher")
+    def api_serendipity(paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or getattr(g, "user_id", "anon"), "GET /api/serendipity"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        try:
+            graph_data = _get_latest_graph_json(session_id, getattr(g, "user_id", None))
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if graph_data is None:
+            return jsonify({"error": "No graph built yet."}), 404
+        engine  = SerendipityEngine()
+        analogs = engine.find_analogs(graph_data)
+        return jsonify({"analogs": [a.to_dict() for a in analogs]})
+
+    # ── Phase 6: Graph History + Memory Routes ───────────────────────────
+
+    @app.route("/api/graphs/history")
+    @require_auth
+    @require_tier("researcher")
+    def api_graph_history():
+        rows = db.fetchall(
+            """
+            SELECT graph_id, seed_paper_id, node_count, edge_count, coverage_score, created_at
+            FROM graphs WHERE user_id = %s::uuid ORDER BY created_at DESC LIMIT 50
+            """,
+            (g.user_id,),
+        )
+        return jsonify({"graphs": [dict(r) for r in rows]})
+
+    @app.route("/api/graph-memory")
+    @require_auth
+    @require_tier("researcher")
+    def api_get_graph_memory():
+        graph_id = request.args.get("graph_id", "").strip()
+        if not graph_id:
+            return jsonify({"error": "graph_id is required"}), 400
+        row = db.fetchone(
+            "SELECT memory_json FROM graph_memory WHERE user_id = %s::uuid AND graph_id = %s",
+            (g.user_id, graph_id),
+        )
+        return jsonify({"memory": row["memory_json"] if row else {}})
+
+    @app.route("/api/graph-memory", methods=["POST"])
+    @require_auth
+    @require_tier("researcher")
+    def api_save_graph_memory():
+        import json as _json
+        data     = request.get_json(silent=True) or {}
+        graph_id = data.get("graph_id", "").strip()
+        memory   = data.get("memory", {})
+        if not graph_id:
+            return jsonify({"error": "graph_id is required"}), 400
+        if not isinstance(memory, dict):
+            return jsonify({"error": "memory must be a JSON object"}), 400
+        memory_str = _json.dumps(memory)
+        if len(memory_str) > 65536:
+            return jsonify({"error": "memory state too large (max 64KB)"}), 413
+        db.execute(
+            """
+            INSERT INTO graph_memory (user_id, graph_id, memory_json, updated_at)
+            VALUES (%s::uuid, %s, %s::jsonb, NOW())
+            ON CONFLICT (user_id, graph_id)
+            DO UPDATE SET memory_json = EXCLUDED.memory_json, updated_at = NOW()
+            """,
+            (g.user_id, graph_id, memory_str),
+        )
+        return jsonify({"success": True})
+
+    app.logger.info("Arivu Phase 6 app ready")
     return app
 
 

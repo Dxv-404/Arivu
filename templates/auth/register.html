@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Create account — Arivu{% endblock %}
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <div class="auth-header">
+      <a href="/" class="auth-logo">Arivu</a>
+      <h1>Create your account</h1>
+      <p class="auth-subhead">Free — 10 graphs per month</p>
+    </div>
+    <div id="auth-error"   class="auth-error"  hidden></div>
+    <div id="auth-success" class="auth-success" hidden></div>
+    <form id="register-form" class="auth-form" novalidate>
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" required autocomplete="email" placeholder="you@university.edu">
+      </div>
+      <div class="form-group">
+        <label for="display_name">Name (optional)</label>
+        <input type="text" id="display_name" autocomplete="name" placeholder="Alex Chen">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" required autocomplete="new-password" minlength="8" placeholder="At least 8 characters">
+      </div>
+      <div class="captcha-wrapper">
+        <div class="h-captcha" data-sitekey="{{ captcha_site_key }}"></div>
+      </div>
+      <p class="consent-text">By creating an account, you agree that Arivu may store your email and usage data as described in our <a href="/privacy">Privacy Policy</a>.</p>
+      <button type="submit" class="btn-primary btn-full" id="register-btn">Create account</button>
+    </form>
+    <div class="auth-footer">Already have an account? <a href="/login">Log in</a></div>
+  </div>
+</div>
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+<script>
+const form = document.getElementById('register-form');
+const err  = document.getElementById('auth-error');
+const ok   = document.getElementById('auth-success');
+const btn  = document.getElementById('register-btn');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.hidden = true; ok.hidden = true; btn.disabled = true; btn.textContent = 'Creating account…';
+  const captchaToken = window.hcaptcha?.getResponse() || '';
+  const resp = await fetch('/register', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: document.getElementById('email').value,
+                          password: document.getElementById('password').value,
+                          display_name: document.getElementById('display_name').value,
+                          captcha_token: captchaToken}),
+  });
+  const data = await resp.json().catch(() => ({}));
+  btn.disabled = false; btn.textContent = 'Create account';
+  if (data.success) { form.style.display = 'none'; ok.textContent = data.message || 'Check your email to verify.'; ok.hidden = false; }
+  else { err.textContent = data.message || 'Registration failed.'; err.hidden = false; if (window.hcaptcha) window.hcaptcha.reset(); }
+});
+</script>
+{% endblock %}

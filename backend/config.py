@@ -86,10 +86,20 @@ class Config:
     HCAPTCHA_SITE_KEY   = os.environ.get("HCAPTCHA_SITE_KEY", "")
     HCAPTCHA_SECRET_KEY = os.environ.get("HCAPTCHA_SECRET_KEY", "")
 
-    # ── Email / Payments / Monitoring (Phase 6+) ──────────────────
+    # ── Email / Resend (Phase 6+) ─────────────────────────────────
     RESEND_API_KEY      = os.environ.get("RESEND_API_KEY", "")
-    STRIPE_SECRET_KEY   = os.environ.get("STRIPE_SECRET_KEY", "")
-    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    EMAIL_FROM          = os.environ.get("EMAIL_FROM", "noreply@arivu.app")
+    EMAIL_FROM_NAME     = os.environ.get("EMAIL_FROM_NAME", "Arivu")
+
+    # ── Payments / Stripe (Phase 6+) ──────────────────────────────
+    STRIPE_SECRET_KEY           = os.environ.get("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY      = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET       = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_RESEARCHER_PRICE_ID  = os.environ.get("STRIPE_RESEARCHER_PRICE_ID", "")
+    STRIPE_LAB_PRICE_ID         = os.environ.get("STRIPE_LAB_PRICE_ID", "")
+
+    # ── Custom Domain (Phase 5+) ──────────────────────────────────
+    CUSTOM_DOMAIN       = os.environ.get("CUSTOM_DOMAIN", "arivu.app")
 
     # ── Translation ───────────────────────────────────────────────
     LIBRETRANSLATE_URL  = os.environ.get("LIBRETRANSLATE_URL", "https://libretranslate.com")
@@ -107,6 +117,16 @@ class Config:
     @property
     def NLP_WORKER_ENABLED(self) -> bool:
         return bool(self.NLP_WORKER_URL)
+
+    @classmethod
+    def stripe_enabled(cls) -> bool:
+        """Always call as Config.stripe_enabled() — lowercase to prevent bare truthy bug."""
+        return bool(cls.STRIPE_SECRET_KEY and cls.STRIPE_WEBHOOK_SECRET)
+
+    @classmethod
+    def email_enabled(cls) -> bool:
+        """Always call as Config.email_enabled() — lowercase to prevent bare truthy bug."""
+        return bool(cls.RESEND_API_KEY)
 
     @classmethod
     def validate(cls) -> None:
@@ -128,6 +148,15 @@ class Config:
         for var, msg in recommended.items():
             if not getattr(cls, var, ""):
                 logger.warning(f"Config: {var} not set — {msg}")
+
+        if cls.ENABLE_AUTH:
+            for var, msg in {
+                "STRIPE_SECRET_KEY":  "Billing disabled",
+                "RESEND_API_KEY":     "Email disabled — auth emails will fail",
+                "HCAPTCHA_SITE_KEY":  "hCaptcha disabled",
+            }.items():
+                if not getattr(cls, var, ""):
+                    logger.warning(f"Config: {var} not set — {msg}")
 
 
 # ── Backward-compatibility alias ──────────────────────────────────────────────

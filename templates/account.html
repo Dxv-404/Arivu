@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Account — Arivu{% endblock %}
+{% block content %}
+<div class="account-page">
+  <div class="account-header">
+    <h1>Account settings</h1>
+    <span class="tier-badge tier-badge--{{ user.tier }}">{{ user.tier | capitalize }} plan</span>
+  </div>
+
+  {% if user.tier == 'free' %}
+  <section class="account-section" id="usage-section">
+    <h2>Usage this month</h2>
+    <div class="usage-meter">
+      <div class="usage-bar"><div class="usage-fill" style="width:{{ (user.graphs_this_month / 10 * 100) | int }}%"></div></div>
+      <span class="usage-label">{{ user.graphs_this_month }} / 10 graphs used — resets {{ user.usage_reset_at.strftime('%b') }} {{ user.usage_reset_at.day if user.usage_reset_at else '' }}</span>
+    </div>
+    <a href="/pricing" class="btn-primary btn-sm" style="margin-top:0.75rem">Upgrade to Researcher — unlimited graphs</a>
+  </section>
+  {% endif %}
+
+  <section class="account-section" id="profile-section">
+    <h2>Profile</h2>
+    <div id="profile-msg" class="account-msg" hidden></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="display_name">Display name</label>
+        <input type="text" id="display_name" value="{{ user.display_name or '' }}" maxlength="100">
+      </div>
+      <div class="form-group">
+        <label for="institution">Institution</label>
+        <input type="text" id="institution" value="{{ user.institution or '' }}" maxlength="200">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="role_field">Role</label>
+      <select id="role_field">
+        {% for r in ['researcher','student','faculty','industry','journalist','other'] %}
+        <option value="{{ r }}" {% if user.role == r %}selected{% endif %}>{{ r | capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="field-readonly"><strong>Email:</strong> {{ user.email }} <span class="field-note">— email cannot be changed in Phase 6</span></p>
+    <button class="btn-primary btn-sm" id="save-profile-btn">Save profile</button>
+  </section>
+
+  <section class="account-section" id="password-section">
+    <h2>Change password</h2>
+    <div id="password-msg" class="account-msg" hidden></div>
+    <div class="form-group"><label for="current_password">Current password</label><input type="password" id="current_password" autocomplete="current-password"></div>
+    <div class="form-group"><label for="new_password">New password</label><input type="password" id="new_password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters"></div>
+    <button class="btn-primary btn-sm" id="change-password-btn">Change password</button>
+  </section>
+
+  <section class="account-section" id="billing-section">
+    <h2>Billing</h2>
+    {% if user.tier == 'free' %}
+      <p>You're on the <strong>Free</strong> plan.</p>
+      <a href="/pricing" class="btn-primary btn-sm">View upgrade options</a>
+    {% else %}
+      <p>You're on the <strong>{{ user.tier | capitalize }}</strong> plan.{% if user.tier_expires_at %} Renews {{ user.tier_expires_at.strftime('%b') }} {{ user.tier_expires_at.day }}, {{ user.tier_expires_at.year }}.{% endif %}</p>
+      <button class="btn-secondary btn-sm" id="manage-billing-btn">Manage billing (Stripe portal)</button>
+    {% endif %}
+  </section>
+
+  {% if user.tier == 'lab' %}
+  <section class="account-section" id="api-keys-section">
+    <h2>API keys</h2>
+    <p class="section-note">Lab tier only. Keys grant programmatic access to Arivu's API.</p>
+    <div id="api-key-msg" class="account-msg" hidden></div>
+    <div id="api-keys-list" class="api-keys-list"><p class="loading-text">Loading keys…</p></div>
+    <div class="form-row">
+      <div class="form-group"><label for="key_label">Label (optional)</label><input type="text" id="key_label" placeholder="e.g. My research script" maxlength="100"></div>
+      <button class="btn-primary btn-sm" id="create-key-btn" style="align-self:flex-end">Create API key</button>
+    </div>
+    <div id="new-key-reveal" class="new-key-reveal" hidden>
+      <strong>Copy your key now — it will not be shown again:</strong>
+      <code id="new-key-value"></code>
+      <button onclick="navigator.clipboard.writeText(document.getElementById('new-key-value').textContent).then(()=>this.textContent='Copied!')" class="btn-ghost btn-sm">Copy</button>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="account-section account-section--danger" id="data-section">
+    <h2>Your data</h2>
+    <div id="gdpr-msg" class="account-msg" hidden></div>
+    <div class="data-action">
+      <div><strong>Export all your data</strong><p>Download a ZIP with your profile, sessions, graph history, and action log.</p></div>
+      <button class="btn-secondary btn-sm" id="export-data-btn">Request data export</button>
+    </div>
+    <hr class="section-divider">
+    <div class="data-action data-action--danger">
+      <div><strong>Delete account</strong><p>Permanently delete your account and all personal data. Graphs (no personal data) are not deleted.</p></div>
+      <button class="btn-danger btn-sm" id="delete-account-btn">Delete my account</button>
+    </div>
+  </section>
+</div>
+<script src="/static/js/account.js"></script>
+{% endblock %}
