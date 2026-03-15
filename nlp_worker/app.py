@@ -107,6 +107,7 @@ async def health():
     """Health check — no auth required. Called by main app on startup."""
     return {
         "status": "ok",
+        "model_loaded": True,
         "model": "all-MiniLM-L6-v2",
         "dimensions": 384,
     }
