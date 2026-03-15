@@ -278,3 +278,75 @@ After Phase 4, these two files intentionally diverge. The `nlp_worker/requiremen
 
 ### Resolution
 Following Phase 4 §1.5 spec (implementation authority per CLAUDE.md Part 0.2). Updated `nlp_worker/requirements.txt` to match Phase 4 spec. The NLP worker doesn't need groq/httpx/python-dotenv — those were only in the Phase 1 mirror file.
+
+---
+
+## [2026-03-15] [PHASE 4] [DRIFT] Neon DATABASE_URL contains channel_binding=require
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** All scripts/commands connecting to Neon DB
+**Severity:** HIGH
+
+### Finding
+Neon's connection string includes `channel_binding=require` which psycopg2 does not support. The error is: `psycopg2.ProgrammingError: invalid dsn: invalid connection option "channel_binding"`. This parameter must be stripped from the URL before use.
+
+### Impact
+All DB connections fail (migrate.py, smoke tests, precompute, deployment) unless channel_binding is removed from the URL.
+
+### Resolution
+Strip `channel_binding=require` from the Neon URL before use. The corrected URL format is: `postgresql://...@ep-xxx.neon.tech/neondb?sslmode=require` (only sslmode, no channel_binding). Documented in DECISIONS.md #17.
+
+---
+
+## [2026-03-15] [PHASE 4] [DRIFT] NLP worker health response missing model_loaded field
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** nlp_worker/app.py, scripts/verify_deployment.py
+**Severity:** LOW
+
+### Finding
+`verify_deployment.py` checks for `model_loaded` in the NLP worker health response, but the original health endpoint only returned `status`, `model`, and `dimensions`.
+
+### Impact
+Deployment verification would always fail on the NLP worker health check.
+
+### Resolution
+Added `"model_loaded": True` to the health endpoint response.
+
+---
+
+## [2026-03-15] [PHASE 4] [DRIFT] nlp_worker/Dockerfile uses nlp_worker/ prefix in COPY paths
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** nlp_worker/Dockerfile
+**Severity:** HIGH
+
+### Finding
+The Dockerfile used `COPY nlp_worker/requirements.txt` and `COPY nlp_worker/app.py`, which works when building from the Arivu project root. HuggingFace Spaces builds from the Space repo root where files are flat (no nlp_worker/ subdirectory).
+
+### Impact
+HF Spaces Docker build would fail with "file not found" errors.
+
+### Resolution
+Changed to flat COPY paths: `COPY requirements.txt` and `COPY app.py`. Documented in DECISIONS.md #18.
+
+---
+
+## [2026-03-15] [PHASE 4] [DRIFT] R2_BUCKET_NAME spec says arivu-data, user bucket is arivu-graphs
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** .env.example, Koyeb environment variables
+**Severity:** MEDIUM
+
+### Finding
+Phase 4 §4 and §12.2 specify `R2_BUCKET_NAME=arivu-data`. The user's actual Cloudflare R2 bucket was created as `arivu-graphs`.
+
+### Impact
+Using the wrong bucket name would cause all R2 operations to fail with "bucket not found".
+
+### Resolution
+Using `arivu-graphs` (user's actual bucket) in .env.example and deployment config. Documented in DECISIONS.md #16.
