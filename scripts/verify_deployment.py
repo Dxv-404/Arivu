@@ -142,7 +142,7 @@ def main():
                 return r.text.strip().startswith("<svg"), (
                     f"HTTP 200, content-type={r.headers.get('content-type')}")
             return False, f"HTTP {r.status_code}"
-        check(f"GET /static/previews/{s}.svg", _svg_check)
+        check(f"GET /static/previews/{slug}.svg", _svg_check)
 
     # ── 6. Gallery Index JSON ─────────────────────────────────────
     print("\n6. Gallery Index")
