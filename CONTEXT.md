@@ -1,7 +1,7 @@
 # Arivu — Active Context
 
 ## Current Phase
-Phase 6 — Auth, Billing & GDPR
+Phase 7 — Temporal Intelligence, Workflow Tools & Public API
 
 ## Phases
 ### Completed
@@ -10,12 +10,13 @@ Phase 6 — Auth, Billing & GDPR
 - [x] Phase 3 — full-text pipeline, intelligence layer & frontend
 - [x] Phase 4 — deployment, production hardening & gallery launch
 - [x] Phase 5 — export system, advanced intelligence & custom domain
+- [x] Phase 6 — auth, billing & GDPR
 
 ### In Progress
-- [ ] Phase 6 — auth, billing & GDPR
+- [ ] Phase 7 — temporal intelligence, workflow tools & public API
 
 ### Not Started
-- Phase 7 through Phase 8
+- Phase 8
 
 ## Live Deployment (Phase 4+)
 | Service | URL |
@@ -33,27 +34,49 @@ Phase 6 — Auth, Billing & GDPR
 - Neon URL requires stripping `channel_binding=require` (psycopg2 incompatible)
 - R2 bucket: `arivu-graphs` (not `arivu-data` from spec)
 - Koyeb free tier scales to zero after 65 min idle — upgrade to eNano ($1.61/mo) for always-on production use
+- ENABLE_AUTH=false by default — all @require_auth, @require_tier, @check_graph_limit decorators pass through
+- TIER_ORDER: free=0, researcher=1, lab=2
 
 ## Last Session Summary
-Phase 5 implementation complete. All 18 §0 backports verified. Full feature implementation:
-- ExportGenerator with 8 export formats (graph-json, graph-csv/ZIP, bibtex, literature-review,
-  genealogy-pdf/WeasyPrint, action-log, graph-png/matplotlib, graph-svg)
-- LivingPaperScorer: citation velocity and trajectory analysis (rising/stable/declining/extinct)
-- OriginalityMapper: Pioneer/Synthesizer/Bridge/Refiner/Contradictor classification
-- ParadigmShiftDetector: 4-signal structural analysis (contradiction surge, cross-domain influx,
-  vocabulary fragmentation, cluster fragmentation)
-- generate_literature_review() added to ArivuLLMClient
-- 4 new API routes: POST /api/export/<type>, GET /api/living-score/<id>,
-  GET /api/originality/<id>, GET /api/paradigm/<seed_id>
-- ExportPanel frontend (export-panel.js, tool.html wiring, CSS)
-- load_retraction_watch.py real implementation (targets retraction_watch table)
-- ground_truth_eval.py real implementation + data/ground_truth/pairs.json (5 seed pairs)
-- generate_og_image.py for branded 1200×630 OG image
-- 135 tests passing (40 new Phase 5 tests, 0 failures)
+Phase 6 implementation complete. Full auth, billing, GDPR, and intelligence module stack:
 
-Key backport fixes applied: GALLERY_INDEX_PATH corrected (§0.3), R2Client.presigned_url()
-added (§0.4), quality_monitor confidence field fixed to base_confidence (§0.5),
-ground_truth_eval.py phase reference fixed (§0.13), data/ground_truth/ directory created (§0.14).
+**Core Auth Stack:**
+- backend/auth.py: Flask Blueprint with register, login, verify-email, forgot/reset-password, logout, resend-verification
+- backend/billing.py: Stripe Checkout, portal, webhooks (subscription created/updated/deleted, payment failed)
+- backend/gdpr.py: GDPR data export ZIP + account deletion (right to erasure)
+- backend/decorators.py: @require_auth, @require_tier(), @check_graph_limit with ENABLE_AUTH passthrough
+- backend/captcha.py: hCaptcha verification with dev bypass
+- backend/mailer.py: 6 transactional emails via Resend (verification, password reset, welcome, payment failed, deletion confirmation, data export ready)
+
+**Intelligence Modules (4 new):**
+- backend/independent_discovery.py: IndependentDiscoveryTracker — detects parallel discoveries via embedding similarity
+- backend/citation_shadow.py: CitationShadowDetector — finds foundational-but-underrecognized papers (fixed: nx.ancestors not nx.descendants, MIN_DIRECT_CITATIONS=1)
+- backend/field_fingerprint.py: FieldFingerprintAnalyzer — 5-dimension field profile for radar chart
+- backend/serendipity_engine.py: SerendipityEngine — cross-domain structural analog finder via pgvector
+
+**Infrastructure:**
+- scripts/migrate_phase6.py: 7 new tables (email_verification_tokens, password_reset_tokens, lab_memberships, api_keys, graph_memory, consent_log, background_jobs columns added to users)
+- scripts/nightly_maintenance.py: expired session cleanup, GDPR processing, free-tier reset, tier downgrade
+- backend/rate_limiter.py: 11 new endpoint rate limits for Phase 6 routes
+- backend/decorators.py: g.user_id set to zero UUID when ENABLE_AUTH=false (prevents AttributeError in routes)
+
+**Frontend:**
+- 8 auth/account templates (login, register, verify_email, forgot_password, reset_password, pricing, account, privacy)
+- static/css/auth.css: complete styles for nav, buttons, auth, pricing, account, legal, cookie banner
+- static/js/account.js: profile save, password change, billing portal, API key CRUD, GDPR export/delete
+- templates/base.html: auth-aware nav, tier badge, upgrade nudge, cookie consent, CSP for hCaptcha
+
+**Stream Route Modifications (§12.2):**
+- Free-tier graph counter increment on cache miss (before build thread)
+- User linkage to graphs after successful build
+
+**Tests:** 170 total (35 new Phase 6 tests, 0 failures)
+
+**Spec Bug Fixes:**
+- independent_discovery.py: spec used non-existent LLMClient/call_llm() → adapted to get_llm_client()/generate_chat_response()
+- citation_shadow.py: nx.descendants→nx.ancestors (wrong direction in directed citation graph), MIN_DIRECT_CITATIONS 2→1
+- gdpr.py: edge_flags→edge_feedback (canonical table name per CLAUDE.md Part 6.8)
+- Rate limiter: spec 3-tuples adapted to existing 2-tuple format
 
 ## Known Issues / Blockers
 - Gallery previews not yet generated — run precompute_gallery.py once S2 key arrives
@@ -62,6 +85,8 @@ ground_truth_eval.py phase reference fixed (§0.13), data/ground_truth/ director
 - Custom domain (arivu.app) DNS not yet configured
 - ground_truth_eval.py needs ≥20 pairs before running eval (currently has 5 seed pairs)
 - WeasyPrint requires libcairo2 on the system — verify Dockerfile includes it
+- Phase 6 migration not yet run against Neon (run scripts/migrate_phase6.py before deploying)
+- ENABLE_AUTH should be set to true in Koyeb only after end-to-end testing
 
 ## Environment
 - DATABASE_URL: postgresql://arivu:localdev@localhost:5433/arivu?sslmode=disable (local)
