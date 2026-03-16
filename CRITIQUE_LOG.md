@@ -839,3 +839,21 @@ None — tier gating is dormant.
 
 ### Resolution
 CONFLICT-009 resolved as moot per ADR-016. No tier ordering changes needed.
+
+---
+
+## [2026-03-16] [PHASE 8] [DRIFT] app.py export route directly instantiates ArivuLLMClient()
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** app.py — POST /api/export route, LLM client singleton pattern
+**Severity:** MEDIUM
+
+### Finding
+`app.py` L1138-1139 directly imported and instantiated `ArivuLLMClient()` inside the export route handler instead of using `get_llm_client()` factory. This bypasses the module-level singleton in `llm_client.py`, meaning the LLM client is not reused across requests and initialization is wasted.
+
+### Impact
+Each export call creates a fresh LLM client instance instead of sharing the singleton. While the DB-backed LLM cache is shared regardless, it violates the established pattern and wastes connection initialization.
+
+### Resolution
+Changed to `from backend.llm_client import get_llm_client; llm_client = get_llm_client()`. Caught by Pessimistic Critic Agent check C9.

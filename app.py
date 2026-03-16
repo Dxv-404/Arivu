@@ -1135,8 +1135,8 @@ def create_app():
         extra      = body.get("extra", {})
         llm_client = None
         try:
-            from backend.llm_client import ArivuLLMClient
-            llm_client = ArivuLLMClient()
+            from backend.llm_client import get_llm_client
+            llm_client = get_llm_client()
         except Exception:
             pass
 
