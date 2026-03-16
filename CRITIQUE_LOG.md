@@ -552,3 +552,75 @@ Flask raises endpoint collision error on app startup.
 
 ### Resolution
 Removed Phase 3 version (simple DB cache lookup), replaced with Phase 7 InsightEngine-based route that provides persona-aware insights. Comment added at Phase 3 location noting supersession.
+
+---
+
+## [2026-03-16] [PHASE 7] [DRIFT] graph_id uses random UUID instead of stable SHA256 hash
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/graph_engine.py — graph_id computation, R2 key path, DB upsert
+**Severity:** HIGH
+
+### Finding
+graph_id was set to a random UUID per build via Python's `uuid.uuid4()`. CLAUDE.md Part 13 specifies: `graph_id = hashlib.sha256(f"{seed_paper_id}_{session_id}".encode()).hexdigest()[:32]`. The random UUID breaks Phase 8's graph_memory_state, live_subscriptions, and all caching that depends on stable graph identity.
+
+### Impact
+Rebuilding the same graph would generate a different graph_id, making it impossible to correlate graphs across sessions, breaking share links, graph memory, live mode subscriptions, and any caching keyed on graph_id.
+
+### Resolution
+Added `_compute_graph_id()` method returning SHA256 hash. Wired into `_build()`, `export_to_json()`, `from_json()`, and R2 key path. See ADR-017.
+
+---
+
+## [2026-03-16] [PHASE 7] [DRIFT] shared_graphs table missing 7 spec-required columns
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** scripts/migrate_phase7.py, backend/lab_manager.py, app.py share route
+**Severity:** HIGH
+
+### Finding
+Initial migrate_phase7.py created shared_graphs with only 5 columns (share_id, share_token, graph_id, user_id, created_at). PHASE_7.md lines 245-258 specify 12 columns including seed_paper_id, seed_title, view_mode, view_state, expires_at, view_count, last_viewed_at. The ON DELETE was SET NULL instead of CASCADE.
+
+### Impact
+Share links could not store paper context (seed_paper_id, seed_title), view configuration (view_mode, view_state), expiration, or view tracking. LabManager.create_share_link() had a truncated signature.
+
+### Resolution
+Schema updated to full 12 columns with idempotent ALTER TABLE for existing DBs. LabManager expanded. Share route joins papers table for seed_title. See ADR-018.
+
+---
+
+## [2026-03-16] [PHASE 7] [SPEC_GAP] Vancouver citation format missing from implementation
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** backend/citation_generator.py, static/js/citation-gen.js
+**Severity:** MEDIUM
+
+### Finding
+ARIVU_COMPLETE_SPEC_v3.md includes Vancouver as a required citation format (dominant in biomedical literature). Phase 7 implementation had 6 styles (APA, MLA, Chicago, BibTeX, IEEE, Harvard) but not Vancouver.
+
+### Impact
+Biomedical researchers — a core target audience — would lack their field's standard citation format.
+
+### Resolution
+Added Vancouver as 7th format to SUPPORTED_STYLES tuple and frontend styles array. Uses standard Vancouver rules: Surname Initials (no periods), up to 6 authors then et al. See ADR-019.
+
+---
+
+## [2026-03-16] [PHASE 7] [SPEC_GAP] R2Client missing upload_bytes() alias for Phase 8
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** backend/r2_client.py
+**Severity:** LOW
+
+### Finding
+Phase 8 code references `R2Client.upload_bytes()` for raw byte uploads (secure_upload.py, live_mode.py). The existing R2Client had `put()`, `upload()` (alias), `upload_json()`, and `put_json()` but no `upload_bytes()`.
+
+### Impact
+Phase 8 modules would fail at runtime with AttributeError when calling upload_bytes().
+
+### Resolution
+Added `upload_bytes()` as thin alias for `put()`, matching the existing alias pattern.

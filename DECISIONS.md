@@ -113,4 +113,26 @@ If you are about to decide something not recorded here, add it first.
 14. backend/mailer.py: Welcome email updated (no "10 graphs/month" text)
 **Alternatives considered:** Full deletion (risky, irreversible), Config-gated dormant (no cleanup).
 **Rationale:** Removes user-facing billing friction while preserving Stripe integration code for portfolio demonstration.
-**Implications:** CONFLICT-009 (TIER_ORDER Phase 7 vs 8) is moot. CONFLICT-007 (Stripe version) is moot. Phase 7 §0.1/§2.3/§2.4 SKIPPED. Phase 8 §0.7 SKIPPED. All future routes use @require_auth only. Existing Neon users updated to tier='researcher' via one-time SQL (2026-03-16, 0 rows — no users registered yet)..
+**Implications:** CONFLICT-009 (TIER_ORDER Phase 7 vs 8) is moot. CONFLICT-007 (Stripe version) is moot. Phase 7 §0.1/§2.3/§2.4 SKIPPED. Phase 8 §0.7 SKIPPED. All future routes use @require_auth only. Existing Neon users updated to tier='researcher' via one-time SQL (2026-03-16, 0 rows — no users registered yet).
+
+## ADR-017: Stable graph_id via SHA256 hash
+**Date:** 2026-03-16
+**Context:** graph_id was set to UUID (random per build), breaking Phase 8 graph_memory_state, live_subscriptions, and caching — all of which key on stable graph identity. CLAUDE.md Part 13 specifies `SHA256(seed_paper_id + "_" + session_id)[:32]`.
+**Decision:** `_compute_graph_id()` method added to AncestryGraph. graph_id = `hashlib.sha256(f"{seed_paper_id}_{session_id}".encode()).hexdigest()[:32]`. Wired into _build(), export_to_json(), from_json(), and R2 key path.
+**Alternatives considered:** Using seed_paper_id alone (collides across sessions), using UUID (unstable, breaks caching).
+**Rationale:** Deterministic — same seed + session always produces same graph_id. Different sessions get different IDs. 32-char hex is compact and collision-resistant.
+**Implications:** R2 key is now `graphs/{graph_id}.json` (was `graphs/{job_id}.json`). All downstream consumers (share links, graph memory, live mode) can rely on stable identity.
+
+## ADR-018: shared_graphs full schema per PHASE_7.md spec
+**Date:** 2026-03-16
+**Context:** Initial migrate_phase7.py created shared_graphs with only 5 columns (share_id, share_token, graph_id, user_id, created_at). PHASE_7.md lines 245-258 specify 12 columns including seed_paper_id, seed_title, view_mode, view_state, expires_at, view_count, last_viewed_at.
+**Decision:** Schema updated to match spec. ON DELETE changed from SET NULL to CASCADE. Idempotent ALTER TABLE ADD COLUMN IF NOT EXISTS added for existing databases.
+**Implications:** LabManager.create_share_link() signature expanded to accept all new fields. Share route in app.py joins graphs→papers for seed_title.
+
+## ADR-019: Vancouver citation format added (7th style)
+**Date:** 2026-03-16
+**Context:** ARIVU_COMPLETE_SPEC_v3.md lists Vancouver as a required citation format (dominant in biomedical literature). Phase 7 implementation had BibTeX but not Vancouver.
+**Decision:** Added Vancouver as 7th format to both backend (citation_generator.py SUPPORTED_STYLES) and frontend (citation-gen.js styles array). BibTeX kept — it's useful for researchers and used in export_generator.py.
+**Alternatives considered:** Replacing BibTeX with Vancouver (would break existing exports).
+**Rationale:** Additive change, no removal. Vancouver uses standard biomedical formatting (Surname AB, up to 6 authors then et al.).
+**Implications:** SUPPORTED_STYLES tuple grows from 6 to 7. All all_styles=True API calls now include Vancouver. Frontend shows 7 style buttons.
