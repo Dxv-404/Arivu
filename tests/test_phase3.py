@@ -136,7 +136,7 @@ class TestPruning:
     def test_compute_all_impacts(self):
         from backend.pruning import compute_all_pruning_impacts
         G = self._make_graph()
-        impacts = compute_all_pruning_impacts(G)
+        impacts = compute_all_pruning_impacts(G, "A")
         assert isinstance(impacts, dict)
         # Every node in the graph should have an impact entry
         for node in ["A", "B", "C", "D", "E"]:

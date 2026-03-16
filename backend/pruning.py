@@ -68,24 +68,30 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
         if working_graph.has_node(pid):
             working_graph.remove_node(pid)
 
-    # Find root nodes in working graph
+    # BFS ONLY from the seed paper — NOT from all roots.
     # In Arivu's DAG: edges go FROM citing paper TO cited paper.
-    # Roots are papers with no predecessors in the working graph.
-    roots = [n for n in working_graph.nodes() if working_graph.in_degree(n) == 0]
-
-    # BFS from roots to find all reachable nodes
-    reachable = set()
-    queue = deque(roots)
-    while queue:
-        node = queue.popleft()
-        if node in reachable:
-            continue
-        reachable.add(node)
-        for successor in working_graph.successors(node):
-            queue.append(successor)
-
-    # Nodes in original graph (minus pruned) not reachable = collapsed
+    # The seed paper is the entry point (in_degree == 0 in the original graph).
+    # If the seed itself was pruned, nothing is reachable → everything collapses.
     all_nodes = set(graph_nx.nodes()) - set(pruned_ids)
+
+    if seed_id in set(pruned_ids):
+        # Seed was pruned — the entire remaining graph collapses
+        reachable = set()
+    elif working_graph.has_node(seed_id):
+        # BFS from seed only — nodes reachable from seed survive
+        reachable = set()
+        queue = deque([seed_id])
+        while queue:
+            node = queue.popleft()
+            if node in reachable:
+                continue
+            reachable.add(node)
+            for successor in working_graph.successors(node):
+                queue.append(successor)
+    else:
+        # Seed not in graph at all (shouldn't happen) — nothing reachable
+        reachable = set()
+
     collapsed_nodes_set = all_nodes - reachable
     surviving_nodes_set = reachable
 
@@ -118,14 +124,14 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
         if node not in original_descendants:
             continue
         # This node survived despite being a descendant of a pruned node
-        for root in roots:
+        # Find path back to seed (the only valid root)
+        if working_graph.has_node(seed_id):
             try:
-                path = nx.shortest_path(working_graph, node, root)
+                path = nx.shortest_path(working_graph, seed_id, node)
                 if path:
                     survival_paths.append({"paper_id": node, "survival_path": path})
-                    break
             except nx.NetworkXNoPath:
-                continue
+                pass
 
     # Before/after DNA (simple version — cluster count by field of study)
     dna_before = _simple_dna(graph_nx, all_papers, set())
@@ -147,35 +153,57 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
     )
 
 
-def compute_all_pruning_impacts(graph_nx: nx.DiGraph) -> dict:
+def compute_all_pruning_impacts(graph_nx: nx.DiGraph, seed_id: str = None) -> dict:
     """
     Precompute collapse count for every node in the graph.
     O(n²) — for 300 nodes this runs in under 3 seconds.
     Returns: dict[paper_id → {"collapse_count": int, "impact_pct": float}]
     Used to populate the impact leaderboard.
+
+    Args:
+        graph_nx: NetworkX DiGraph from AncestryGraph.graph
+        seed_id: seed paper ID (root of the graph). If provided, BFS only
+                 starts from seed — giving accurate collapse counts. If None,
+                 falls back to the seed being the node with in_degree == 0.
     """
     impacts = {}
     total = len(graph_nx.nodes())
 
+    # Determine the seed if not explicitly provided
+    if seed_id is None:
+        # Fallback: find the node with in_degree == 0 (should be the seed)
+        roots = [n for n in graph_nx.nodes() if graph_nx.in_degree(n) == 0]
+        seed_id = roots[0] if roots else None
+
+    if seed_id is None:
+        # No seed found — return zero impacts
+        return {node: {"collapse_count": 0, "impact_pct": 0.0} for node in graph_nx.nodes()}
+
     for node in graph_nx.nodes():
-        working = graph_nx.copy()
-        working.remove_node(node)
+        if node == seed_id:
+            # Removing the seed collapses everything
+            collapsed_count = total - 1
+        else:
+            working = graph_nx.copy()
+            working.remove_node(node)
 
-        roots = [n for n in working.nodes() if working.in_degree(n) == 0]
-        reachable = set()
-        queue = deque(roots)
-        while queue:
-            n = queue.popleft()
-            if n in reachable:
-                continue
-            reachable.add(n)
-            for s in working.successors(n):
-                queue.append(s)
+            # BFS only from seed — not from all roots
+            reachable = set()
+            if working.has_node(seed_id):
+                queue = deque([seed_id])
+                while queue:
+                    n = queue.popleft()
+                    if n in reachable:
+                        continue
+                    reachable.add(n)
+                    for s in working.successors(n):
+                        queue.append(s)
 
-        collapsed = (set(graph_nx.nodes()) - {node}) - reachable
+            collapsed_count = len((set(graph_nx.nodes()) - {node}) - reachable)
+
         impacts[node] = {
-            "collapse_count": len(collapsed),
-            "impact_pct": round(len(collapsed) / total * 100, 1) if total > 0 else 0.0,
+            "collapse_count": collapsed_count,
+            "impact_pct": round(collapsed_count / total * 100, 1) if total > 0 else 0.0,
         }
 
     return impacts

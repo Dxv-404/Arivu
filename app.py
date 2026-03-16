@@ -321,9 +321,7 @@ def create_app():
         from backend.normalizer import normalize_user_input
         from backend.schemas import SearchRequest
 
-        allowed, headers = await_sync(
-            rate_limiter.check(g.session_id, "POST /api/search")
-        )
+        allowed, headers = rate_limiter.check_sync(g.session_id, "POST /api/search")
         if not allowed:
             return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
@@ -386,9 +384,7 @@ def create_app():
         paper_id = canonical_id if canonical_id else paper_id_raw
 
         # Rate limiting
-        allowed, headers = await_sync(
-            rate_limiter.check(session_id, "GET /api/graph/stream")
-        )
+        allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
         if not allowed:
             return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
@@ -422,6 +418,27 @@ def create_app():
                     "falling through to fresh build"
                 )
             else:
+                # Attach panel data (DNA, diversity, leaderboard) from DB.
+                # R2 stores the raw graph JSON before panel data is computed,
+                # so cached graphs need this enrichment step.
+                try:
+                    panel_row = db.fetchone(
+                        "SELECT leaderboard_json, dna_json, diversity_json FROM graphs WHERE graph_id = %s",
+                        (cached_graph["graph_id"],),
+                    )
+                    if panel_row:
+                        if panel_row.get("leaderboard_json"):
+                            lb = panel_row["leaderboard_json"]
+                            graph_data["leaderboard"] = lb if isinstance(lb, list) else json.loads(lb)
+                        if panel_row.get("dna_json"):
+                            dna = panel_row["dna_json"]
+                            graph_data["dna_profile"] = dna if isinstance(dna, dict) else json.loads(dna)
+                        if panel_row.get("diversity_json"):
+                            div = panel_row["diversity_json"]
+                            graph_data["diversity_score"] = div if isinstance(div, dict) else json.loads(div)
+                except Exception as exc:
+                    logger.warning(f"Failed to attach panel data to cached graph: {exc}")
+
                 def _cached_stream():
                     payload = {"status": "done", "cached": True, "graph": graph_data}
                     yield f"data: {json.dumps(payload)}\n\n"
@@ -643,9 +660,7 @@ def create_app():
         """
         session_id = g.session_id
 
-        allowed, headers = await_sync(
-            rate_limiter.check(session_id, "POST /api/prune")
-        )
+        allowed, headers = rate_limiter.check_sync(session_id, "POST /api/prune")
         if not allowed:
             return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
@@ -831,9 +846,7 @@ def create_app():
         """AI guide chat endpoint."""
         session_id = g.session_id
 
-        allowed, headers = await_sync(
-            rate_limiter.check(session_id, "POST /api/chat")
-        )
+        allowed, headers = rate_limiter.check_sync(session_id, "POST /api/chat")
         if not allowed:
             return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 

@@ -89,7 +89,7 @@ def precompute_paper(slug: str, paper_id: str, r2: R2Client, force: bool = False
     graph_json["precomputed_pruning"] = {paper_id: seed_pruning.to_dict()}
 
     # 5. Compute leaderboard (GAP-P8-60)
-    all_impacts = compute_all_pruning_impacts(graph.graph)
+    all_impacts = compute_all_pruning_impacts(graph.graph, graph.seed_paper_id)
     leaderboard = sorted(
         [{"paper_id": pid, **data} for pid, data in all_impacts.items()],
         key=lambda x: x.get("collapse_count", 0),

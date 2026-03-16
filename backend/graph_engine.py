@@ -476,7 +476,7 @@ class AncestryGraph:
 
         # 2. Leaderboard — precompute pruning impact for every node
         try:
-            leaderboard = compute_all_pruning_impacts(self.graph)
+            leaderboard = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
             # Store raw impacts for enriching graph_json nodes later
             self._pruning_impacts = leaderboard
             sorted_leaderboard = sorted(
