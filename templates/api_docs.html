@@ -1,0 +1,895 @@
+{% extends "base.html" %}
+
+{% block title %}API Documentation — Arivu{% endblock %}
+{% block meta_description %}Arivu public REST API v1 documentation. Programmatic access to research ancestry graphs, DNA profiles, mutations, and more.{% endblock %}
+
+{% block head %}
+<style>
+  /* ─── API Docs Layout ──────────────────────────────────────────────────── */
+  .api-docs {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 24px 100px;
+  }
+  .api-docs h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+  .api-docs .docs-sub {
+    color: var(--text-muted);
+    font-size: 1rem;
+    margin-bottom: 12px;
+    line-height: 1.6;
+  }
+  .api-docs .docs-base-url {
+    display: inline-block;
+    padding: 6px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--accent-teal);
+    margin-bottom: 36px;
+  }
+
+  /* ─── Section Headings ─────────────────────────────────────────────────── */
+  .api-docs h2 {
+    font-size: 1.375rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--bg-elevated);
+  }
+  .api-docs h2:first-of-type {
+    margin-top: 0;
+  }
+
+  /* ─── Auth Section ─────────────────────────────────────────────────────── */
+  .auth-info {
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+    margin-bottom: 32px;
+  }
+  .auth-info p {
+    color: var(--text-secondary);
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    margin-bottom: 12px;
+  }
+  .auth-info p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* ─── Endpoint Card ────────────────────────────────────────────────────── */
+  .endpoint {
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-md);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .endpoint__header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--bg-elevated);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
+  }
+  .endpoint__header:hover {
+    background: rgba(255,255,255,0.02);
+  }
+  .endpoint__method {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+  }
+  .endpoint__method--get {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--success);
+  }
+  .endpoint__method--post {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+  }
+  .endpoint__path {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .endpoint__desc-brief {
+    margin-left: auto;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .endpoint__toggle {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .endpoint.open .endpoint__toggle {
+    transform: rotate(180deg);
+  }
+  .endpoint__body {
+    display: none;
+    padding: 20px;
+    border-top: 1px solid var(--bg-elevated);
+  }
+  .endpoint.open .endpoint__body {
+    display: block;
+  }
+  .endpoint__body p {
+    color: var(--text-secondary);
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    margin-bottom: 16px;
+  }
+
+  /* ─── Parameters Table ─────────────────────────────────────────────────── */
+  .params-heading {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+  .params-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+    font-size: 0.875rem;
+  }
+  .params-table th {
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--bg-elevated);
+    background: rgba(0,0,0,0.15);
+  }
+  .params-table td {
+    padding: 8px 12px;
+    color: var(--text-primary);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: top;
+  }
+  .params-table .param-name {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--accent-teal);
+    white-space: nowrap;
+  }
+  .params-table .param-type {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+  }
+  .params-table .param-req {
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .param-req--yes { color: var(--danger); }
+  .param-req--no { color: var(--text-muted); }
+
+  /* ─── Code Blocks ──────────────────────────────────────────────────────── */
+  .code-heading {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+  .code-block {
+    background: var(--bg-primary);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin-bottom: 16px;
+  }
+  .code-block pre {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre;
+  }
+  .code-block .json-key { color: var(--accent-teal); }
+  .code-block .json-str { color: var(--success); }
+  .code-block .json-num { color: var(--warning); }
+  .code-block .json-bool { color: var(--conf-specul); }
+  .code-block .json-null { color: var(--text-muted); }
+
+  /* ─── Rate Limit Note ──────────────────────────────────────────────────── */
+  .rate-note {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    border-radius: var(--radius-md);
+    padding: 14px 18px;
+    margin-top: 32px;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+  .rate-note strong {
+    color: var(--warning);
+  }
+
+  /* ─── TOC ──────────────────────────────────────────────────────────────── */
+  .api-toc {
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-md);
+    padding: 16px 20px;
+    margin-bottom: 36px;
+  }
+  .api-toc__title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 10px;
+  }
+  .api-toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .api-toc li {
+    margin-bottom: 4px;
+  }
+  .api-toc a {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    text-decoration: none;
+    transition: color 0.1s;
+  }
+  .api-toc a:hover {
+    color: var(--accent-gold);
+  }
+  .api-toc .toc-method {
+    display: inline-block;
+    width: 40px;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  .api-toc .toc-method--get { color: var(--success); }
+  .api-toc .toc-method--post { color: var(--accent-blue); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="api-docs">
+  <h1>Arivu API Documentation</h1>
+  <p class="docs-sub">
+    Programmatic access to research ancestry graphs, DNA profiles, intellectual mutations, and more.
+    All endpoints require authentication via API key.
+  </p>
+  <div class="docs-base-url">Base URL: https://arivu.app/v1</div>
+
+  <!-- Table of Contents -->
+  <div class="api-toc">
+    <div class="api-toc__title">Endpoints</div>
+    <ul>
+      <li><a href="#ep-search"><span class="toc-method toc-method--get">GET</span> /v1/papers/search</a></li>
+      <li><a href="#ep-graph"><span class="toc-method toc-method--get">GET</span> /v1/papers/{id}/graph</a></li>
+      <li><a href="#ep-dna"><span class="toc-method toc-method--get">GET</span> /v1/papers/{id}/dna</a></li>
+      <li><a href="#ep-score"><span class="toc-method toc-method--get">GET</span> /v1/papers/{id}/score</a></li>
+      <li><a href="#ep-prune"><span class="toc-method toc-method--post">POST</span> /v1/papers/{id}/prune</a></li>
+      <li><a href="#ep-gaps"><span class="toc-method toc-method--get">GET</span> /v1/papers/{id}/gaps</a></li>
+      <li><a href="#ep-mutations"><span class="toc-method toc-method--get">GET</span> /v1/papers/{id}/mutations</a></li>
+      <li><a href="#ep-fingerprint"><span class="toc-method toc-method--get">GET</span> /v1/fields/{name}/fingerprint</a></li>
+      <li><a href="#ep-webhooks"><span class="toc-method toc-method--post">POST</span> /v1/subscriptions</a></li>
+    </ul>
+  </div>
+
+  <!-- Authentication -->
+  <h2>Authentication</h2>
+  <div class="auth-info">
+    <p>
+      All API requests must include your API key in the <code>X-API-Key</code> header.
+      You can generate API keys from your <a href="/account">Account Settings</a> page.
+    </p>
+    <div class="code-block">
+<pre>curl -H "<span class="json-key">X-API-Key</span>: <span class="json-str">your_api_key_here</span>" \
+     https://arivu.app/v1/papers/search?q=attention+transformer</pre>
+    </div>
+    <p>
+      Requests without a valid API key will receive a <code>401 Unauthorized</code> response.
+      Keys are tied to your account tier and inherit its rate limits.
+    </p>
+  </div>
+
+  <!-- Endpoints -->
+  <h2>Endpoints</h2>
+
+  <!-- GET /v1/papers/search -->
+  <div class="endpoint open" id="ep-search">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/search</span>
+      <span class="endpoint__desc-brief">Search for papers</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Search for academic papers by title, DOI, or keywords. Returns matching papers from Semantic Scholar and OpenAlex.</p>
+      <div class="params-heading">Query Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">q</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Search query (min 3 characters). Can be a paper title, DOI, or keywords.</td>
+          </tr>
+          <tr>
+            <td class="param-name">limit</td>
+            <td class="param-type">integer</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>Maximum number of results (default: 10, max: 50).</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">results</span>": [
+    {
+      "<span class="json-key">paper_id</span>": "<span class="json-str">204e3073870fae3d05bcbc2f6a8e263d9b72e776</span>",
+      "<span class="json-key">title</span>": "<span class="json-str">Attention Is All You Need</span>",
+      "<span class="json-key">authors</span>": [<span class="json-str">"Ashish Vaswani"</span>, <span class="json-str">"Noam Shazeer"</span>],
+      "<span class="json-key">year</span>": <span class="json-num">2017</span>,
+      "<span class="json-key">citation_count</span>": <span class="json-num">98234</span>,
+      "<span class="json-key">fields_of_study</span>": [<span class="json-str">"Computer Science"</span>]
+    }
+  ],
+  "<span class="json-key">total</span>": <span class="json-num">1</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/papers/{id}/graph -->
+  <div class="endpoint" id="ep-graph">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/{id}/graph</span>
+      <span class="endpoint__desc-brief">Get ancestry graph</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Retrieve the full intellectual ancestry graph for a paper. Returns nodes, edges with mutation types, and metadata. If no cached graph exists, one will be built (which may take 30-120 seconds).</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar 40-character corpus ID of the seed paper.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="params-heading">Query Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">max_depth</td>
+            <td class="param-type">integer</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>BFS crawl depth (1-3, default: adaptive based on paper age).</td>
+          </tr>
+          <tr>
+            <td class="param-name">max_refs</td>
+            <td class="param-type">integer</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>Maximum references per paper (10-50, default: 50).</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">nodes</span>": [
+    {
+      "<span class="json-key">paper_id</span>": "<span class="json-str">204e3073...</span>",
+      "<span class="json-key">title</span>": "<span class="json-str">Attention Is All You Need</span>",
+      "<span class="json-key">year</span>": <span class="json-num">2017</span>,
+      "<span class="json-key">citation_count</span>": <span class="json-num">98234</span>,
+      "<span class="json-key">fields_of_study</span>": [<span class="json-str">"Computer Science"</span>]
+    }
+  ],
+  "<span class="json-key">edges</span>": [
+    {
+      "<span class="json-key">source</span>": "<span class="json-str">204e3073...</span>",
+      "<span class="json-key">target</span>": "<span class="json-str">abc12345...</span>",
+      "<span class="json-key">mutation_type</span>": "<span class="json-str">generalization</span>",
+      "<span class="json-key">confidence_tier</span>": "<span class="json-str">HIGH</span>",
+      "<span class="json-key">citation_intent</span>": "<span class="json-str">methodological_adoption</span>"
+    }
+  ],
+  "<span class="json-key">metadata</span>": {
+    "<span class="json-key">graph_id</span>": "<span class="json-str">a1b2c3d4...</span>",
+    "<span class="json-key">seed_paper_id</span>": "<span class="json-str">204e3073...</span>",
+    "<span class="json-key">seed_paper_title</span>": "<span class="json-str">Attention Is All You Need</span>",
+    "<span class="json-key">total_nodes</span>": <span class="json-num">152</span>,
+    "<span class="json-key">total_edges</span>": <span class="json-num">203</span>,
+    "<span class="json-key">model_version</span>": "<span class="json-str">1.0.0</span>"
+  }
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/papers/{id}/dna -->
+  <div class="endpoint" id="ep-dna">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/{id}/dna</span>
+      <span class="endpoint__desc-brief">Get research DNA profile</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Retrieve the Research DNA profile for a paper's ancestry graph. Shows the semantic clusters that make up the paper's intellectual heritage, computed via consensus clustering.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar 40-character corpus ID.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">clusters</span>": [
+    {
+      "<span class="json-key">label</span>": "<span class="json-str">Sequence-to-Sequence Models</span>",
+      "<span class="json-key">percentage</span>": <span class="json-num">34.2</span>,
+      "<span class="json-key">paper_count</span>": <span class="json-num">52</span>,
+      "<span class="json-key">representative_papers</span>": [
+        "<span class="json-str">Sequence to Sequence Learning with Neural Networks</span>"
+      ]
+    },
+    {
+      "<span class="json-key">label</span>": "<span class="json-str">Attention Mechanisms</span>",
+      "<span class="json-key">percentage</span>": <span class="json-num">28.9</span>,
+      "<span class="json-key">paper_count</span>": <span class="json-num">44</span>,
+      "<span class="json-key">representative_papers</span>": [
+        "<span class="json-str">Neural Machine Translation by Jointly Learning to Align and Translate</span>"
+      ]
+    }
+  ],
+  "<span class="json-key">total_papers</span>": <span class="json-num">152</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/papers/{id}/score -->
+  <div class="endpoint" id="ep-score">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/{id}/score</span>
+      <span class="endpoint__desc-brief">Get intellectual diversity score</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Retrieve the intellectual diversity score for a paper's ancestry. Returns a composite score (0-100) based on four components: temporal span, field diversity, mutation diversity, and depth ratio.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar 40-character corpus ID.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">overall_score</span>": <span class="json-num">72.5</span>,
+  "<span class="json-key">components</span>": {
+    "<span class="json-key">temporal_span</span>": <span class="json-num">85.0</span>,
+    "<span class="json-key">field_diversity</span>": <span class="json-num">63.2</span>,
+    "<span class="json-key">mutation_diversity</span>": <span class="json-num">71.8</span>,
+    "<span class="json-key">depth_ratio</span>": <span class="json-num">70.0</span>
+  },
+  "<span class="json-key">context_note</span>": "<span class="json-str">Above average diversity for Computer Science papers</span>"
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- POST /v1/papers/{id}/prune -->
+  <div class="endpoint" id="ep-prune">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--post">POST</span>
+      <span class="endpoint__path">/v1/papers/{id}/prune</span>
+      <span class="endpoint__desc-brief">Simulate paper removal</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Simulate removing one or more papers from history and compute the cascading impact on the ancestry graph. Returns which papers would collapse and which would survive.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar corpus ID of the seed (root) paper.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="params-heading">Request Body (JSON)</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">paper_ids</td>
+            <td class="param-type">string[]</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Array of 40-character corpus IDs to remove from history.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Request</div>
+      <div class="code-block">
+<pre>POST /v1/papers/204e3073.../prune
+Content-Type: application/json
+
+{
+  "<span class="json-key">paper_ids</span>": [
+    "<span class="json-str">abc12345678901234567890123456789012345678</span>"
+  ]
+}</pre>
+      </div>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">collapsed_nodes</span>": [
+    {
+      "<span class="json-key">paper_id</span>": "<span class="json-str">def98765...</span>",
+      "<span class="json-key">bfs_level</span>": <span class="json-num">1</span>
+    }
+  ],
+  "<span class="json-key">surviving_nodes</span>": [
+    {
+      "<span class="json-key">paper_id</span>": "<span class="json-str">ghi11111...</span>",
+      "<span class="json-key">survival_path</span>": [<span class="json-str">"ghi11111..."</span>, <span class="json-str">"jkl22222..."</span>]
+    }
+  ],
+  "<span class="json-key">impact_percentage</span>": <span class="json-num">31.0</span>,
+  "<span class="json-key">collapsed_count</span>": <span class="json-num">47</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/papers/{id}/gaps -->
+  <div class="endpoint" id="ep-gaps">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/{id}/gaps</span>
+      <span class="endpoint__desc-brief">Find research gaps</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Identify potential research gaps in the paper's ancestry graph. Uses pgvector-based semantic analysis to find underexplored areas and missing connections between research clusters.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar 40-character corpus ID.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">gaps</span>": [
+    {
+      "<span class="json-key">description</span>": "<span class="json-str">No papers bridge attention mechanisms with reinforcement learning in this lineage</span>",
+      "<span class="json-key">cluster_a</span>": "<span class="json-str">Attention Mechanisms</span>",
+      "<span class="json-key">cluster_b</span>": "<span class="json-str">Reinforcement Learning</span>",
+      "<span class="json-key">semantic_distance</span>": <span class="json-num">0.72</span>,
+      "<span class="json-key">confidence</span>": "<span class="json-str">MEDIUM</span>"
+    }
+  ],
+  "<span class="json-key">total_gaps</span>": <span class="json-num">3</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/papers/{id}/mutations -->
+  <div class="endpoint" id="ep-mutations">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/papers/{id}/mutations</span>
+      <span class="endpoint__desc-brief">List intellectual mutations</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Retrieve all classified intellectual mutations (edges) in the paper's ancestry graph. Each mutation describes how one paper inherited and transformed ideas from another.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">id</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Semantic Scholar 40-character corpus ID.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="params-heading">Query Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">type</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>Filter by mutation type: adoption, generalization, specialization, hybridization, contradiction, revival, incidental.</td>
+          </tr>
+          <tr>
+            <td class="param-name">min_confidence</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>Minimum confidence tier: HIGH, MEDIUM, LOW, SPECULATIVE.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">mutations</span>": [
+    {
+      "<span class="json-key">edge_id</span>": "<span class="json-str">204e3073...:abc12345...</span>",
+      "<span class="json-key">citing_paper</span>": "<span class="json-str">Attention Is All You Need</span>",
+      "<span class="json-key">cited_paper</span>": "<span class="json-str">Neural Machine Translation by Jointly Learning to Align</span>",
+      "<span class="json-key">mutation_type</span>": "<span class="json-str">generalization</span>",
+      "<span class="json-key">confidence_tier</span>": "<span class="json-str">HIGH</span>",
+      "<span class="json-key">citation_intent</span>": "<span class="json-str">methodological_adoption</span>",
+      "<span class="json-key">mutation_evidence</span>": "<span class="json-str">Extended single-head attention to multi-head parallel attention across all layers</span>"
+    }
+  ],
+  "<span class="json-key">total</span>": <span class="json-num">203</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET /v1/fields/{name}/fingerprint -->
+  <div class="endpoint" id="ep-fingerprint">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--get">GET</span>
+      <span class="endpoint__path">/v1/fields/{name}/fingerprint</span>
+      <span class="endpoint__desc-brief">Get field fingerprint</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Retrieve the intellectual fingerprint of an academic field, computed from ancestry graphs built across the field. Shows the dominant mutation patterns, key foundational papers, and structural characteristics of the field's research lineage.</p>
+      <div class="params-heading">Path Parameters</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">name</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Field name, URL-encoded (e.g., <code>Computer%20Science</code>, <code>Biology</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">field</span>": "<span class="json-str">Computer Science</span>",
+  "<span class="json-key">mutation_distribution</span>": {
+    "<span class="json-key">adoption</span>": <span class="json-num">0.35</span>,
+    "<span class="json-key">generalization</span>": <span class="json-num">0.22</span>,
+    "<span class="json-key">specialization</span>": <span class="json-num">0.18</span>,
+    "<span class="json-key">hybridization</span>": <span class="json-num">0.12</span>,
+    "<span class="json-key">contradiction</span>": <span class="json-num">0.05</span>,
+    "<span class="json-key">revival</span>": <span class="json-num">0.03</span>,
+    "<span class="json-key">incidental</span>": <span class="json-num">0.05</span>
+  },
+  "<span class="json-key">foundational_papers</span>": [
+    {
+      "<span class="json-key">paper_id</span>": "<span class="json-str">204e3073...</span>",
+      "<span class="json-key">title</span>": "<span class="json-str">Attention Is All You Need</span>",
+      "<span class="json-key">impact_score</span>": <span class="json-num">0.94</span>
+    }
+  ],
+  "<span class="json-key">graphs_analyzed</span>": <span class="json-num">127</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- POST /v1/subscriptions (Webhooks) -->
+  <div class="endpoint" id="ep-webhooks">
+    <div class="endpoint__header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="endpoint__method endpoint__method--post">POST</span>
+      <span class="endpoint__path">/v1/subscriptions</span>
+      <span class="endpoint__desc-brief">Subscribe to webhooks</span>
+      <span class="endpoint__toggle" aria-hidden="true">&#9660;</span>
+    </div>
+    <div class="endpoint__body">
+      <p>Create a webhook subscription to receive notifications when specific events occur. Arivu will send HTTP POST requests to your callback URL with event data, signed using HMAC-SHA256.</p>
+      <div class="params-heading">Request Body (JSON)</div>
+      <table class="params-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="param-name">event</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>Event type to subscribe to: <code>graph.built</code>, <code>graph.updated</code>, <code>paper.retracted</code>.</td>
+          </tr>
+          <tr>
+            <td class="param-name">url</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--yes">Yes</span></td>
+            <td>HTTPS callback URL to receive webhook events.</td>
+          </tr>
+          <tr>
+            <td class="param-name">secret</td>
+            <td class="param-type">string</td>
+            <td><span class="param-req param-req--no">No</span></td>
+            <td>Optional shared secret for HMAC-SHA256 payload signing. If omitted, the global webhook signing secret is used.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="code-heading">Example Request</div>
+      <div class="code-block">
+<pre>POST /v1/subscriptions
+Content-Type: application/json
+X-API-Key: your_api_key_here
+
+{
+  "<span class="json-key">event</span>": "<span class="json-str">graph.built</span>",
+  "<span class="json-key">url</span>": "<span class="json-str">https://your-server.com/webhooks/arivu</span>",
+  "<span class="json-key">secret</span>": "<span class="json-str">your_signing_secret</span>"
+}</pre>
+      </div>
+      <div class="code-heading">Example Response</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">subscription_id</span>": "<span class="json-str">sub_a1b2c3d4</span>",
+  "<span class="json-key">event</span>": "<span class="json-str">graph.built</span>",
+  "<span class="json-key">url</span>": "<span class="json-str">https://your-server.com/webhooks/arivu</span>",
+  "<span class="json-key">created_at</span>": "<span class="json-str">2026-03-16T12:00:00Z</span>",
+  "<span class="json-key">status</span>": "<span class="json-str">active</span>"
+}</pre>
+      </div>
+      <div class="code-heading">Webhook Payload (sent to your URL)</div>
+      <div class="code-block">
+<pre>{
+  "<span class="json-key">event</span>": "<span class="json-str">graph.built</span>",
+  "<span class="json-key">timestamp</span>": "<span class="json-str">2026-03-16T12:05:00Z</span>",
+  "<span class="json-key">data</span>": {
+    "<span class="json-key">graph_id</span>": "<span class="json-str">a1b2c3d4...</span>",
+    "<span class="json-key">seed_paper_id</span>": "<span class="json-str">204e3073...</span>",
+    "<span class="json-key">total_nodes</span>": <span class="json-num">152</span>,
+    "<span class="json-key">total_edges</span>": <span class="json-num">203</span>
+  }
+}
+
+<span style="color: var(--text-muted);">// Signature header: X-Arivu-Signature: sha256=...</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rate Limits -->
+  <h2>Rate Limits</h2>
+  <div class="rate-note">
+    <strong>Rate limits</strong> are applied per API key and depend on your account tier.
+    When rate limited, the API returns <code>429 Too Many Requests</code> with a
+    <code>Retry-After</code> header indicating seconds until the limit resets.
+  </div>
+  <table class="params-table" style="margin-top: 16px;">
+    <thead><tr><th>Tier</th><th>Requests / minute</th><th>Graph builds / day</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Free</td>
+        <td>30</td>
+        <td>5</td>
+      </tr>
+      <tr>
+        <td>Researcher</td>
+        <td>60</td>
+        <td>25</td>
+      </tr>
+      <tr>
+        <td>Developer</td>
+        <td>120</td>
+        <td>100</td>
+      </tr>
+      <tr>
+        <td>Lab</td>
+        <td>200</td>
+        <td>250</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Error Codes -->
+  <h2>Error Codes</h2>
+  <table class="params-table">
+    <thead><tr><th>Status</th><th>Code</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>400</code></td><td>VALIDATION_ERROR</td><td>Invalid request parameters.</td></tr>
+      <tr><td><code>401</code></td><td>AUTHENTICATION_ERROR</td><td>Missing or invalid API key.</td></tr>
+      <tr><td><code>403</code></td><td>AUTHORIZATION_ERROR</td><td>Your tier does not have access to this endpoint.</td></tr>
+      <tr><td><code>404</code></td><td>PAPER_NOT_FOUND</td><td>Paper not found in any data source.</td></tr>
+      <tr><td><code>422</code></td><td>NO_ABSTRACT</td><td>Paper has no abstract; cannot build meaningful graph.</td></tr>
+      <tr><td><code>429</code></td><td>RATE_LIMIT</td><td>Rate limit exceeded. Check Retry-After header.</td></tr>
+      <tr><td><code>500</code></td><td>INTERNAL_ERROR</td><td>Unexpected server error.</td></tr>
+      <tr><td><code>502</code></td><td>EXTERNAL_API_ERROR</td><td>Upstream data source (Semantic Scholar, OpenAlex) unavailable.</td></tr>
+      <tr><td><code>503</code></td><td>NLP_WORKER_ERROR</td><td>NLP processing service is temporarily unavailable.</td></tr>
+    </tbody>
+  </table>
+  <div class="code-heading" style="margin-top: 16px;">Error Response Format</div>
+  <div class="code-block">
+<pre>{
+  "<span class="json-key">error</span>": "<span class="json-str">PAPER_NOT_FOUND</span>",
+  "<span class="json-key">message</span>": "<span class="json-str">No paper found with the given ID</span>",
+  "<span class="json-key">details</span>": {}
+}</pre>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Open first endpoint by default, rest start collapsed
+  // (The first one has class="open" in the HTML already)
+  // Toggle on header click is handled by inline onclick handlers
+</script>
+{% endblock %}

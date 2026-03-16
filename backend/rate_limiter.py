@@ -160,6 +160,30 @@ class ArivuRateLimiter:
         "POST /api/graph-memory":         (20, 60),
         # Anonymous graph build limit: 5 fresh builds per hour per session
         "POST /api/graph/stream":         (5,  3600),
+        # Phase 7 — temporal, workflow, and collaboration
+        "GET /api/time-machine":          (3,  60),
+        "GET /api/counterfactual":        (5,  60),
+        "POST /api/adversarial-review":   (3,  3600),
+        "GET /api/citation-audit":        (10, 60),
+        "POST /api/citation-generator":   (30, 60),
+        "POST /api/reading-prioritizer":  (5,  60),
+        "POST /api/paper-positioning":    (10, 60),
+        "POST /api/rewrite-suggester":    (5,  60),
+        "POST /api/share":                (10, 3600),
+        "POST /api/lab/invite":           (5,  3600),
+        "GET /api/insights":              (30, 60),
+        "POST /api/persona":              (20, 60),
+        "POST /api/guided-discovery":     (20, 60),
+        # Phase 7 — public API rate limits (key format: "API <endpoint_template>")
+        "API GET /papers/{id}/graph":           (100, 3600),
+        "API GET /papers/{id}/dna":             (200, 3600),
+        "API GET /papers/{id}/score":           (200, 3600),
+        "API POST /papers/{id}/prune":          (50,  3600),
+        "API GET /papers/{id}/gaps":            (100, 3600),
+        "API GET /papers/{id}/mutations":       (100, 3600),
+        "API GET /papers/search":               (200, 3600),
+        "API GET /fields/{name}/fingerprint":   (50,  3600),
+        "API POST /v1/subscriptions":           (20,  3600),
     }
 
     def __init__(self):

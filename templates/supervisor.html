@@ -1,0 +1,471 @@
+{% extends "base.html" %}
+
+{% block title %}Lab Dashboard — Arivu{% endblock %}
+
+{% block head %}
+<style>
+  /* ─── Supervisor Dashboard Layout ──────────────────────────────────────── */
+  .supervisor-page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  .supervisor-page h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+  .supervisor-page .page-sub {
+    color: var(--text-muted);
+    font-size: 0.9375rem;
+    margin-bottom: 32px;
+  }
+
+  /* ─── Stats Summary ────────────────────────────────────────────────────── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+  .stat-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    text-align: center;
+  }
+  .stat-card__value {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent-gold);
+    line-height: 1.2;
+  }
+  .stat-card__label {
+    display: block;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* ─── Sections ─────────────────────────────────────────────────────────── */
+  .sv-section {
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-md);
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+  .sv-section__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--bg-elevated);
+  }
+  .sv-section__header h2 {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+  .sv-section__header .badge {
+    padding: 2px 10px;
+    background: var(--bg-elevated);
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .sv-section__body {
+    padding: 0;
+  }
+  .sv-section__body--padded {
+    padding: 20px;
+  }
+
+  /* ─── Members Table ────────────────────────────────────────────────────── */
+  .members-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .members-table thead {
+    background: rgba(0,0,0,0.15);
+  }
+  .members-table th {
+    padding: 10px 16px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--bg-elevated);
+  }
+  .members-table td {
+    padding: 12px 16px;
+    color: var(--text-primary);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: middle;
+  }
+  .members-table tr:last-child td {
+    border-bottom: none;
+  }
+  .members-table tr:hover td {
+    background: rgba(255,255,255,0.02);
+  }
+  .member-name {
+    font-weight: 500;
+  }
+  .member-email {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+  }
+  .role-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .role-badge--supervisor {
+    background: rgba(212, 168, 67, 0.15);
+    color: var(--accent-gold);
+  }
+  .role-badge--member {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+  }
+
+  /* ─── Pending Invitations ──────────────────────────────────────────────── */
+  .invite-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .invite-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .invite-item:last-child {
+    border-bottom: none;
+  }
+  .invite-email {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+  }
+  .invite-status {
+    font-size: 0.75rem;
+    color: var(--warning);
+    font-weight: 500;
+  }
+  .invite-empty {
+    padding: 24px 20px;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+
+  /* ─── Invite Form ──────────────────────────────────────────────────────── */
+  .invite-form {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .invite-form .form-group {
+    flex: 1;
+  }
+  .invite-form label {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .invite-form input[type="email"] {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .invite-form input[type="email"]:focus {
+    border-color: var(--accent-gold);
+  }
+  .invite-form input[type="email"]::placeholder {
+    color: var(--text-muted);
+  }
+  .invite-form .btn-invite {
+    padding: 10px 20px;
+    background: var(--accent-gold);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font-size: 0.875rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .invite-form .btn-invite:hover {
+    opacity: 0.9;
+  }
+  .invite-form .btn-invite:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .invite-msg {
+    margin-top: 10px;
+    font-size: 0.8125rem;
+    min-height: 1.2em;
+  }
+  .invite-msg--success { color: var(--success); }
+  .invite-msg--error { color: var(--danger); }
+
+  /* ─── Activity Feed ────────────────────────────────────────────────────── */
+  .activity-feed {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .activity-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.875rem;
+  }
+  .activity-item:last-child {
+    border-bottom: none;
+  }
+  .activity-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    margin-top: 6px;
+    flex-shrink: 0;
+  }
+  .activity-dot--graph { background: var(--accent-teal); }
+  .activity-dot--invite { background: var(--accent-gold); }
+  .activity-dot--join { background: var(--success); }
+  .activity-text {
+    flex: 1;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+  .activity-text strong {
+    font-weight: 600;
+  }
+  .activity-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .activity-empty {
+    padding: 24px 20px;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="supervisor-page">
+  <h1>Lab Dashboard</h1>
+  <p class="page-sub">Manage your lab members, invitations, and activity.</p>
+
+  <!-- Stats summary -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <span class="stat-card__value">{{ data.member_count }}</span>
+      <span class="stat-card__label">Members</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-card__value">{{ data.pending_invites | length }}</span>
+      <span class="stat-card__label">Pending Invites</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-card__value">{{ data.total_graphs }}</span>
+      <span class="stat-card__label">Total Graphs</span>
+    </div>
+  </div>
+
+  <!-- Members table -->
+  <div class="sv-section">
+    <div class="sv-section__header">
+      <h2>Members</h2>
+      <span class="badge">{{ data.member_count }} total</span>
+    </div>
+    <div class="sv-section__body">
+      {% if data.members %}
+      <table class="members-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Joined</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for member in data.members %}
+          <tr>
+            <td class="member-name">{{ member.display_name or member.email.split('@')[0] }}</td>
+            <td class="member-email">{{ member.email }}</td>
+            <td>
+              <span class="role-badge role-badge--{{ member.role or 'member' }}">
+                {{ member.role or 'member' }}
+              </span>
+            </td>
+            <td>{{ member.joined_at[:10] if member.joined_at else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="invite-empty">No members yet. Invite your first team member below.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Pending invitations -->
+  <div class="sv-section">
+    <div class="sv-section__header">
+      <h2>Pending Invitations</h2>
+      <span class="badge">{{ data.pending_invites | length }}</span>
+    </div>
+    <div class="sv-section__body">
+      {% if data.pending_invites %}
+      <ul class="invite-list">
+        {% for invite in data.pending_invites %}
+        <li class="invite-item">
+          <span class="invite-email">{{ invite.email }}</span>
+          <span class="invite-status">Pending</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="invite-empty">No pending invitations.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Invite member form -->
+  <div class="sv-section">
+    <div class="sv-section__header">
+      <h2>Invite Member</h2>
+    </div>
+    <div class="sv-section__body sv-section__body--padded">
+      <form class="invite-form" id="invite-form">
+        <div class="form-group">
+          <label for="invite-email">Email address</label>
+          <input type="email" id="invite-email" name="email"
+                 placeholder="colleague@university.edu"
+                 required autocomplete="email">
+        </div>
+        <button type="submit" class="btn-invite" id="invite-submit-btn">Send Invite</button>
+      </form>
+      <div class="invite-msg" id="invite-msg" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <!-- Recent activity -->
+  <div class="sv-section">
+    <div class="sv-section__header">
+      <h2>Recent Activity</h2>
+    </div>
+    <div class="sv-section__body">
+      {% if data.recent_activity %}
+      <ul class="activity-feed">
+        {% for event in data.recent_activity %}
+        <li class="activity-item">
+          <span class="activity-dot activity-dot--{{ event.type or 'graph' }}"></span>
+          <span class="activity-text">
+            <strong>{{ event.user_name or 'A member' }}</strong>
+            {{ event.description or event.action or 'performed an action' }}
+          </span>
+          <span class="activity-time">{{ event.timestamp[:16] if event.timestamp else '' }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="activity-empty">No recent activity to show.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('invite-form');
+    var emailInput = document.getElementById('invite-email');
+    var submitBtn = document.getElementById('invite-submit-btn');
+    var msgEl = document.getElementById('invite-msg');
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+
+      var email = emailInput.value.trim();
+      if (!email) return;
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Sending...';
+      msgEl.textContent = '';
+      msgEl.className = 'invite-msg';
+
+      fetch('/api/lab/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      })
+      .then(function(res) {
+        return res.json().then(function(data) {
+          return { ok: res.ok, data: data };
+        });
+      })
+      .then(function(result) {
+        if (result.ok) {
+          msgEl.textContent = 'Invitation sent to ' + email;
+          msgEl.className = 'invite-msg invite-msg--success';
+          emailInput.value = '';
+        } else {
+          msgEl.textContent = result.data.error || result.data.message || 'Failed to send invitation.';
+          msgEl.className = 'invite-msg invite-msg--error';
+        }
+      })
+      .catch(function() {
+        msgEl.textContent = 'Network error. Please try again.';
+        msgEl.className = 'invite-msg invite-msg--error';
+      })
+      .finally(function() {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send Invite';
+      });
+    });
+  });
+</script>
+{% endblock %}

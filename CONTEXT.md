@@ -39,48 +39,52 @@ Phase 7 — Temporal Intelligence, Workflow Tools & Public API
 - New users register with tier='researcher'; billing.py kept dormant for portfolio reference
 
 ## Last Session Summary
-Billing removal implementation complete (ADR-016). All features now free for authenticated users. Changes across 14 files: auth.py (new users register as tier='researcher'), decorators.py (usage-reset removed, require_tier/check_graph_limit marked DORMANT), app.py (8 @require_tier removed, 3 billing routes removed, free-tier counter removed, /pricing route removed, /api/usage updated), exceptions.py (GraphLimitReachedError marked DORMANT), rate_limiter.py (billing rate limit removed), config.py (Stripe warning removed), pricing.html (DELETED), account.html (simplified — no tier badge/usage/billing), base.html (no pricing nav/tier badge/upgrade nudge), account.js (billing portal handler removed), auth.css (dead billing CSS removed), nightly_maintenance.py (usage-reset/tier-downgrade removed), test_phase6.py (TestBillingWebhook deleted, tier tests simplified), mailer.py (welcome email updated). Tests: 168 passed, 0 failed. billing.py stays DORMANT (never imported by app.py). DB columns untouched. CONFLICT-009 and CONFLICT-007 now moot. Phase 7 §0.1/§2.3/§2.4 will be SKIPPED. Phase 8 §0.7 will be SKIPPED.
+Phase 7 implementation complete. Full temporal intelligence, workflow tools, public API, and lab collaboration stack.
 
-### Previous Session Summary (Phase 6)
-Phase 6 implementation complete. Full auth, billing, GDPR, and intelligence module stack:
+**Backend Modules (17 new):**
+- backend/time_machine.py: TimeMachineEngine — temporal graph slicing with DB caching (time_machine_cache)
+- backend/vocabulary_tracker.py: VocabularyEvolutionTracker — TF-IDF heatmap with vocabulary_snapshots caching
+- backend/extinction_detector.py: ExtinctionEventDetector — detects research line endings
+- backend/counterfactual_engine.py: CounterfactualEngine — "what if paper X never existed?" with LLM narrative
+- backend/adversarial_reviewer.py: AdversarialReviewer — PDF/abstract review with landscape pgvector search
+- backend/citation_audit.py: CitationAudit — overcitation, undercitation, self-citation analysis
+- backend/citation_generator.py: CitationGenerator — 6 formats (APA, MLA, Chicago, BibTeX, IEEE, Harvard)
+- backend/reading_prioritizer.py: ReadingPrioritizer — PageRank-based reading list from graph
+- backend/paper_positioning.py: PaperPositioningTool — intellectual landscape positioning via LLM
+- backend/rewrite_suggester.py: RewriteSuggester — related work section rewrite suggestions
+- backend/persona_engine.py: PersonaEngine — 4 personas (explorer, critic, innovator, historian)
+- backend/insight_engine.py: InsightEngine — persona-aware insight feed from graph analysis
+- backend/secure_upload.py: SecureFileUploadHandler — PDF validation + SHA-256 hashing
+- backend/public_api.py: Flask Blueprint /v1/ — public REST API with API key auth
+- backend/webhook_manager.py: WebhookManager — HMAC-signed webhook delivery with retry
+- backend/lab_manager.py: LabManager — lab invite/accept/remove + shareable graph links
 
-**Core Auth Stack:**
-- backend/auth.py: Flask Blueprint with register, login, verify-email, forgot/reset-password, logout, resend-verification
-- backend/billing.py: Stripe Checkout, portal, webhooks (subscription created/updated/deleted, payment failed)
-- backend/gdpr.py: GDPR data export ZIP + account deletion (right to erasure)
-- backend/decorators.py: @require_auth, @require_tier(), @check_graph_limit with ENABLE_AUTH passthrough
-- backend/captcha.py: hCaptcha verification with dev bypass
-- backend/mailer.py: 6 transactional emails via Resend (verification, password reset, welcome, payment failed, deletion confirmation, data export ready)
+**Routes (~30 new in app.py):**
+- Time Machine, counterfactual, adversarial review, citation audit/generator
+- Reading prioritizer, paper positioning, rewrite suggester
+- Persona (GET/POST), insights, action-log export, guided discovery
+- Share CRUD, lab management (members, invite, accept, remove), supervisor dashboard
+- Email change (request + confirm), API docs page
+- All routes use @require_auth only (NO @require_tier per ADR-016)
 
-**Intelligence Modules (4 new):**
-- backend/independent_discovery.py: IndependentDiscoveryTracker — detects parallel discoveries via embedding similarity
-- backend/citation_shadow.py: CitationShadowDetector — finds foundational-but-underrecognized papers (fixed: nx.ancestors not nx.descendants, MIN_DIRECT_CITATIONS=1)
-- backend/field_fingerprint.py: FieldFingerprintAnalyzer — 5-dimension field profile for radar chart
-- backend/serendipity_engine.py: SerendipityEngine — cross-domain structural analog finder via pgvector
+**Frontend (9 JS + 3 HTML):**
+- static/js/: time-machine.js, view-switcher.js, constellation.js, geological.js, river-view.js, workflow.js, citation-gen.js, persona.js, insight-feed.js
+- templates/: shared_graph.html, supervisor.html, api_docs.html
 
 **Infrastructure:**
-- scripts/migrate_phase6.py: 7 new tables (email_verification_tokens, password_reset_tokens, lab_memberships, api_keys, graph_memory, consent_log, background_jobs columns added to users)
-- scripts/nightly_maintenance.py: expired session cleanup, GDPR processing, free-tier reset, tier downgrade
-- backend/rate_limiter.py: 11 new endpoint rate limits for Phase 6 routes
-- backend/decorators.py: g.user_id set to zero UUID when ENABLE_AUTH=false (prevents AttributeError in routes)
+- scripts/migrate_phase7.py: 9 new tables (shared_graphs, vocabulary_snapshots, time_machine_cache, counterfactual_cache, adversarial_reviews, lab_invites, webhook_subscriptions, webhook_deliveries, email_change_tokens)
+- scripts/weekly_digest.py: Lab activity weekly digest
+- backend/rate_limiter.py: 13 internal + 9 public API rate limits added
+- backend/mailer.py: 2 new email templates (lab invite, email change verification)
 
-**Frontend:**
-- 8 auth/account templates (login, register, verify_email, forgot_password, reset_password, pricing, account, privacy)
-- static/css/auth.css: complete styles for nav, buttons, auth, pricing, account, legal, cookie banner
-- static/js/account.js: profile save, password change, billing portal, API key CRUD, GDPR export/delete
-- templates/base.html: auth-aware nav, tier badge, upgrade nudge, cookie consent, CSP for hCaptcha
+**Route-to-Module Interface Fixes:**
+- CitationAudit.audit(): args are (paper_id, graph_json), not (graph_json, paper_id) — route fixed
+- CitationGenerator.generate(): takes (paper_ids, styles, all_styles) and does own DB lookup — route simplified
+- ReadingPrioritizer.prioritize(): takes (graph_json, max_items) using NetworkX — route updated to pass graph
+- CounterfactualEngine.analyze(): returns dict (from .to_dict()), not dataclass — tests fixed
+- AdversarialReviewer: httpx imported inside method, mock at method level — tests fixed
 
-**Stream Route Modifications (§12.2):**
-- Free-tier graph counter increment on cache miss (before build thread)
-- User linkage to graphs after successful build
-
-**Tests:** 170 total (35 new Phase 6 tests, 0 failures)
-
-**Spec Bug Fixes:**
-- independent_discovery.py: spec used non-existent LLMClient/call_llm() → adapted to get_llm_client()/generate_chat_response()
-- citation_shadow.py: nx.descendants→nx.ancestors (wrong direction in directed citation graph), MIN_DIRECT_CITATIONS 2→1
-- gdpr.py: edge_flags→edge_feedback (canonical table name per CLAUDE.md Part 6.8)
-- Rate limiter: spec 3-tuples adapted to existing 2-tuple format
+**Tests:** 219 total (51 new Phase 7 tests, 0 failures across all phases)
 
 ## Known Issues / Blockers
 - Gallery previews not yet generated — run precompute_gallery.py once S2 key arrives

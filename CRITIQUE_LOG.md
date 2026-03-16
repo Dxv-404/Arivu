@@ -495,3 +495,60 @@ Analysis completed: 35 items across Phase 6 built code (Categories A), 14 items 
 
 ### Resolution
 RESOLVED (2026-03-16). User chose modified hybrid: billing.py kept DORMANT (not deleted), all billing touchpoints removed from active code. 14 files changed, pricing.html deleted, 168 tests pass (2 billing tests removed). See DECISIONS.md ADR-016 for complete change list.
+
+---
+
+## [2026-03-16] [PHASE 7] [SPEC_GAP] PHASE_7_v1.md missing — 13 modules reference it
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** 13 backend modules (time_machine.py, vocabulary_tracker.py, extinction_detector.py, counterfactual_engine.py, adversarial_reviewer.py, citation_audit.py, citation_generator.py, reading_prioritizer.py, paper_positioning.py, rewrite_suggester.py, persona_engine.py, insight_engine.py, secure_upload.py)
+**Severity:** HIGH
+
+### Finding
+PHASE_7.md references "Identical to v1" for 13 module implementations, but no PHASE_7_v1.md file exists. Each module had to be written from scratch using only the class names, method signatures, and dataclass shapes defined in PHASE_7.md.
+
+### Impact
+Every module that said "Identical to v1" had to be reconstructed from spec context, increasing implementation risk.
+
+### Resolution
+All 13 modules written from scratch, validated against spec shapes. Known spec bugs corrected during implementation: LLMClient → get_llm_client(), R2Client.upload_bytes() → R2Client.upload(), Bearer → X-API-Key auth header.
+
+---
+
+## [2026-03-16] [PHASE 7] [DRIFT] Route-to-module interface mismatches in app.py
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** app.py routes for citation-audit, citation-generator, reading-prioritizer
+**Severity:** MEDIUM
+
+### Finding
+Three Phase 7 routes in app.py had argument order or signature mismatches with actual module implementations:
+1. CitationAudit.audit() takes (paper_id, graph_json) — route had (graph_data, paper_id)
+2. CitationGenerator.generate() takes (paper_ids, styles, all_styles) and does own DB lookup — route was fetching papers separately
+3. ReadingPrioritizer.prioritize() takes (graph_json, max_items) — route was passing paper_ids list
+
+### Impact
+Routes would have failed at runtime with TypeError or incorrect results.
+
+### Resolution
+All three routes corrected to match actual module interfaces. Tests updated accordingly.
+
+---
+
+## [2026-03-16] [PHASE 7] [CONFLICT] Phase 3 api_insights endpoint conflicts with Phase 7
+
+**Type:** CONFLICT
+**Status:** RESOLVED
+**Affects:** app.py — /api/insights/<paper_id> route
+**Severity:** HIGH
+
+### Finding
+Phase 3 defined a route `api_insights` at `/api/insights/<paper_id>` that reads from `insight_cache` table. Phase 7 defines a new `api_insights` route at `/api/insights/<seed_paper_id>` that uses InsightEngine with persona filtering. Both cannot coexist as Flask endpoint names must be unique.
+
+### Impact
+Flask raises endpoint collision error on app startup.
+
+### Resolution
+Removed Phase 3 version (simple DB cache lookup), replaced with Phase 7 InsightEngine-based route that provides persona-aware insights. Comment added at Phase 3 location noting supersession.

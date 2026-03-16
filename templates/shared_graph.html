@@ -1,0 +1,369 @@
+{% extends "base.html" %}
+
+{% block title %}Shared Graph — Arivu{% endblock %}
+
+{% block meta_description %}Shared research ancestry graph on Arivu — trace how ideas evolve across academic research.{% endblock %}
+{% block og_title %}Shared Research Ancestry Graph — Arivu{% endblock %}
+
+{% block head %}
+<meta property="og:url" content="{{ share_url }}">
+<meta property="og:image" content="{{ url_for('static', filename='assets/og-image.png', _external=True) }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Shared Research Ancestry Graph — Arivu">
+<meta name="twitter:description" content="Explore the intellectual ancestry of this research paper on Arivu.">
+<style>
+  .shared-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--bg-elevated);
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+  }
+  .shared-banner__left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .shared-banner__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    color: var(--accent-gold);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    letter-spacing: 0.02em;
+  }
+  .shared-banner__views {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+  }
+  .shared-banner__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .shared-banner__cta {
+    display: inline-block;
+    padding: 6px 16px;
+    background: var(--accent-gold);
+    color: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    text-decoration: none;
+    transition: opacity 0.15s;
+  }
+  .shared-banner__cta:hover {
+    opacity: 0.9;
+    text-decoration: none;
+  }
+  .shared-banner__copy-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .shared-banner__copy-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+  }
+
+  .shared-graph-container {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 56px - 46px);
+    overflow: hidden;
+    background: var(--bg-primary);
+  }
+  .shared-graph-container svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .shared-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 16px;
+    color: var(--text-secondary);
+  }
+  .shared-loading__spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--bg-elevated);
+    border-top-color: var(--accent-gold);
+    border-radius: 50%;
+    animation: shared-spin 0.8s linear infinite;
+  }
+  @keyframes shared-spin {
+    to { transform: rotate(360deg); }
+  }
+  .shared-loading__text {
+    font-size: 0.9375rem;
+  }
+
+  .shared-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+    color: var(--text-secondary);
+    padding: 24px;
+    text-align: center;
+  }
+  .shared-error__title {
+    color: var(--danger);
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+  .shared-error__message {
+    max-width: 480px;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+  }
+
+  .shared-readonly-badge {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    padding: 4px 10px;
+    background: var(--bg-surface);
+    border: 1px solid var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  #shared-tooltip {
+    position: absolute;
+    display: none;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    max-width: 320px;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  #shared-tooltip .tt-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  #shared-tooltip .tt-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="shared-banner">
+  <div class="shared-banner__left">
+    <span class="shared-banner__badge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+      </svg>
+      Shared via Arivu
+    </span>
+    <span class="shared-banner__views">{{ share.view_count }} view{{ 's' if share.view_count != 1 else '' }}</span>
+  </div>
+  <div class="shared-banner__actions">
+    <button class="shared-banner__copy-btn" id="copy-share-url" title="Copy share link">
+      Copy link
+    </button>
+    <a href="/" class="shared-banner__cta">Build your own graph</a>
+  </div>
+</div>
+
+<div class="shared-graph-container" id="shared-graph-container">
+  <div class="shared-readonly-badge">Read-only</div>
+  <div id="shared-tooltip" role="tooltip"></div>
+
+  <div class="shared-loading" id="shared-loading">
+    <div class="shared-loading__spinner"></div>
+    <div class="shared-loading__text">Loading shared graph...</div>
+  </div>
+
+  <div class="shared-error" id="shared-error" hidden>
+    <div class="shared-error__title">Unable to load graph</div>
+    <div class="shared-error__message" id="shared-error-message">
+      This shared graph may have expired or been removed.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.ARIVU_SHARED = {
+    graphId: "{{ share.graph_id | e }}",
+    shareToken: "{{ share.share_token | e }}",
+    shareUrl: "{{ share_url | e }}",
+    readOnly: true
+  };
+</script>
+<script src="{{ url_for('static', filename='js/graph.js') }}" defer></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('shared-graph-container');
+    const loading = document.getElementById('shared-loading');
+    const errorEl = document.getElementById('shared-error');
+    const errorMsg = document.getElementById('shared-error-message');
+    const tooltip = document.getElementById('shared-tooltip');
+
+    // Copy share URL to clipboard
+    document.getElementById('copy-share-url').addEventListener('click', function() {
+      navigator.clipboard.writeText(window.ARIVU_SHARED.shareUrl).then(() => {
+        this.textContent = 'Copied!';
+        setTimeout(() => { this.textContent = 'Copy link'; }, 2000);
+      });
+    });
+
+    // Fetch and render the graph
+    fetch('/api/graph/' + encodeURIComponent(window.ARIVU_SHARED.graphId))
+      .then(function(res) {
+        if (!res.ok) throw new Error('Graph not found or expired (HTTP ' + res.status + ')');
+        return res.json();
+      })
+      .then(function(graphData) {
+        loading.hidden = true;
+        renderSharedGraph(container, graphData);
+      })
+      .catch(function(err) {
+        loading.hidden = true;
+        errorMsg.textContent = err.message || 'This shared graph may have expired or been removed.';
+        errorEl.hidden = false;
+      });
+
+    function renderSharedGraph(container, data) {
+      // If ArivuGraph class is available from graph.js, use it in read-only mode
+      if (typeof ArivuGraph !== 'undefined') {
+        try {
+          var graph = new ArivuGraph(container, data, { readOnly: true });
+          graph.render();
+          return;
+        } catch (e) {
+          console.warn('ArivuGraph unavailable, falling back to basic D3 render:', e);
+        }
+      }
+
+      // Fallback: basic D3 force-directed render
+      var width = container.clientWidth;
+      var height = container.clientHeight;
+
+      var svg = d3.select(container)
+        .append('svg')
+        .attr('width', width)
+        .attr('height', height)
+        .attr('viewBox', [0, 0, width, height]);
+
+      var g = svg.append('g');
+
+      // Zoom behavior (read-only: pan + zoom only)
+      svg.call(d3.zoom()
+        .scaleExtent([0.2, 4])
+        .on('zoom', function(event) {
+          g.attr('transform', event.transform);
+        })
+      );
+
+      var nodes = (data.nodes || []).map(function(n) { return Object.assign({}, n); });
+      var edges = (data.edges || []).map(function(e) {
+        return {
+          source: e.source || e.citing_paper_id,
+          target: e.target || e.cited_paper_id,
+          mutation_type: e.mutation_type || 'incidental',
+          confidence_tier: e.confidence_tier || 'SPECULATIVE'
+        };
+      });
+
+      var simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(edges).id(function(d) { return d.paper_id || d.id; }).distance(80))
+        .force('charge', d3.forceManyBody().strength(-200))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(20));
+
+      var link = g.append('g')
+        .attr('class', 'links')
+        .selectAll('line')
+        .data(edges)
+        .enter().append('line')
+        .attr('stroke', '#475569')
+        .attr('stroke-width', 1)
+        .attr('stroke-opacity', 0.5);
+
+      var node = g.append('g')
+        .attr('class', 'nodes')
+        .selectAll('circle')
+        .data(nodes)
+        .enter().append('circle')
+        .attr('r', function(d) { return Math.max(5, Math.min(16, Math.sqrt(d.citation_count || 1) * 1.5)); })
+        .attr('fill', function(d) {
+          var field = (d.fields_of_study || [])[0] || '';
+          var colors = {
+            'Computer Science': '#648FFF', 'Biology': '#785EF0',
+            'Physics': '#DC267F', 'Chemistry': '#FE6100',
+            'Economics': '#FFB000', 'Mathematics': '#009E73'
+          };
+          return colors[field] || '#56B4E9';
+        })
+        .attr('stroke', 'rgba(255,255,255,0.15)')
+        .attr('stroke-width', 1);
+
+      // Tooltip on hover
+      node.on('mouseover', function(event, d) {
+        var year = d.year ? ' (' + d.year + ')' : '';
+        var authors = (d.authors || []).slice(0, 3).join(', ');
+        if ((d.authors || []).length > 3) authors += ' et al.';
+        tooltip.innerHTML =
+          '<div class="tt-title">' + (d.title || 'Untitled') + '</div>' +
+          '<div class="tt-meta">' + authors + year + '</div>';
+        tooltip.style.display = 'block';
+      })
+      .on('mousemove', function(event) {
+        var rect = container.getBoundingClientRect();
+        tooltip.style.left = (event.clientX - rect.left + 12) + 'px';
+        tooltip.style.top = (event.clientY - rect.top - 10) + 'px';
+      })
+      .on('mouseout', function() {
+        tooltip.style.display = 'none';
+      });
+
+      simulation.on('tick', function() {
+        link
+          .attr('x1', function(d) { return d.source.x; })
+          .attr('y1', function(d) { return d.source.y; })
+          .attr('x2', function(d) { return d.target.x; })
+          .attr('y2', function(d) { return d.target.y; });
+        node
+          .attr('cx', function(d) { return d.x; })
+          .attr('cy', function(d) { return d.y; });
+      });
+    }
+  });
+</script>
+{% endblock %}

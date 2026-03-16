@@ -105,6 +105,11 @@ class Config:
     LIBRETRANSLATE_URL  = os.environ.get("LIBRETRANSLATE_URL", "https://libretranslate.com")
     LIBRETRANSLATE_KEY  = os.environ.get("LIBRETRANSLATE_KEY", "")
 
+    # ── Phase 7 — Webhooks, API, Uploads ─────────────────────────
+    WEBHOOK_SIGNING_SECRET = os.environ.get("WEBHOOK_SIGNING_SECRET", "")
+    API_BASE_URL           = os.environ.get("API_BASE_URL", "https://arivu.app")
+    MAX_UPLOAD_MB          = int(os.environ.get("MAX_UPLOAD_MB", "10"))
+
     # ── Derived properties ────────────────────────────────────────
     @classmethod
     def R2_ENABLED(cls) -> bool:
@@ -148,6 +153,9 @@ class Config:
         for var, msg in recommended.items():
             if not getattr(cls, var, ""):
                 logger.warning(f"Config: {var} not set — {msg}")
+
+        if not cls.WEBHOOK_SIGNING_SECRET:
+            logger.warning("Config: WEBHOOK_SIGNING_SECRET not set — webhook subscriptions will use random per-subscription secrets only")
 
         if cls.ENABLE_AUTH:
             # STRIPE_SECRET_KEY warning removed — billing dormant (ADR-016).

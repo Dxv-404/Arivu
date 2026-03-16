@@ -149,3 +149,39 @@ def send_data_export_ready(email: str, display_name: str, download_url: str) -> 
 <p style="font-size:13px;color:#64748B">Link expires in 24 hours.</p>
 </body></html>"""
     return _send(email, "Your Arivu data export is ready", text, html)
+
+
+# ── Phase 7 additions ────────────────────────────────────────────────────────
+
+def send_lab_invite_email(email: str, lab_name: str, accept_url: str) -> bool:
+    """Send a lab invitation email."""
+    text = (
+        f"Hi,\n\nYou've been invited to join {lab_name} on Arivu.\n\n"
+        f"Accept the invitation here:\n\n{accept_url}\n\n"
+        f"This invite expires in 7 days.\n\n— The Arivu team"
+    )
+    html = f"""<!DOCTYPE html>
+<html><body style="font-family:sans-serif;max-width:600px;margin:40px auto;color:#1a1a2e">
+<h2 style="color:#D4A843">Lab Invitation</h2>
+<p>You've been invited to join <strong>{lab_name}</strong> on Arivu.</p>
+<a href="{accept_url}" style="display:inline-block;padding:12px 24px;background:#D4A843;color:#0a0e17;text-decoration:none;border-radius:6px;font-weight:600;">Accept invitation</a>
+<p style="margin-top:24px;font-size:13px;color:#64748B">This invite expires in 7 days.</p>
+</body></html>"""
+    return _send(email, f"You're invited to join {lab_name} on Arivu", text, html)
+
+
+def send_email_change_verification(new_email: str, token: str, confirm_url: str) -> bool:
+    """Send email change verification to the new email address."""
+    text = (
+        f"Hi,\n\nYou requested to change your Arivu email to this address.\n\n"
+        f"Confirm the change here:\n\n{confirm_url}\n\n"
+        f"This link expires in 1 hour. If you didn't request this, ignore this email.\n\n— The Arivu team"
+    )
+    html = f"""<!DOCTYPE html>
+<html><body style="font-family:sans-serif;max-width:600px;margin:40px auto;color:#1a1a2e">
+<h2 style="color:#D4A843">Confirm Email Change</h2>
+<p>You requested to change your Arivu account email to this address.</p>
+<a href="{confirm_url}" style="display:inline-block;padding:12px 24px;background:#D4A843;color:#0a0e17;text-decoration:none;border-radius:6px;font-weight:600;">Confirm email change</a>
+<p style="margin-top:24px;font-size:13px;color:#64748B">This link expires in 1 hour.</p>
+</body></html>"""
+    return _send(new_email, "Confirm your new Arivu email address", text, html)

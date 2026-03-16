@@ -45,6 +45,22 @@ from backend.citation_shadow import CitationShadowDetector
 from backend.field_fingerprint import FieldFingerprintAnalyzer
 from backend.serendipity_engine import SerendipityEngine
 
+# Phase 7 imports
+from backend.public_api import public_api as api_v1
+from backend.time_machine import TimeMachineEngine
+from backend.counterfactual_engine import CounterfactualEngine
+from backend.adversarial_reviewer import AdversarialReviewer
+from backend.citation_audit import CitationAudit
+from backend.citation_generator import CitationGenerator
+from backend.reading_prioritizer import ReadingPrioritizer
+from backend.paper_positioning import PaperPositioningTool
+from backend.rewrite_suggester import RewriteSuggester
+from backend.persona_engine import PersonaEngine
+from backend.insight_engine import InsightEngine
+from backend.lab_manager import LabManager
+from backend.secure_upload import SecureFileUploadHandler
+from backend.webhook_manager import WebhookManager
+
 logger = logging.getLogger(__name__)
 
 # Module-level Flask app — required for @app.route decorators and app.logger
@@ -218,6 +234,9 @@ def create_app():
 
     # Phase 6: Register auth blueprint
     app.register_blueprint(auth_bp)
+
+    # Phase 7: Register public API v1 blueprint
+    app.register_blueprint(api_v1)
 
     # Phase 6: Initialize Resend once at startup
     from backend.mailer import _init_resend
@@ -799,24 +818,7 @@ def create_app():
 
     # ─── GET /api/insights/<paper_id> ─────────────────────────────────────
 
-    @app.route("/api/insights/<paper_id>")
-    @require_session
-    def api_insights(paper_id: str):
-        """Return insight feed items for a graph."""
-        row = db.fetchone(
-            "SELECT insights_json FROM insight_cache WHERE paper_id = %s",
-            (paper_id,),
-        )
-        if not row or not row.get("insights_json"):
-            return jsonify({"insights": []})
-
-        cached = row["insights_json"]
-        items = (
-            cached if isinstance(cached, list)
-            else json.loads(cached) if isinstance(cached, str)
-            else []
-        )
-        return jsonify({"insights": items[:10]})
+    # Phase 3 insight_cache route superseded by Phase 7 InsightEngine (below)
 
     # ─── POST /api/insight-feedback ──────────────────────────────────────
 
@@ -1560,8 +1562,699 @@ def create_app():
         )
         return jsonify({"success": True})
 
-    app.logger.info("Arivu Phase 6 app ready")
+    # ── Phase 7: Time Machine Routes ───────────────────────────────────
+
+    @app.route("/api/time-machine/<seed_paper_id>")
+    @require_auth
+    def api_time_machine(seed_paper_id: str):
+        """Build temporal dataset for the Time Machine visualization."""
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or g.user_id, "GET /api/time-machine"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        graph_data = None
+        if seed_paper_id and seed_paper_id != "current":
+            from backend.r2_client import R2Client
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE seed_paper_id = %s "
+                "AND user_id = %s::uuid ORDER BY created_at DESC LIMIT 1",
+                (seed_paper_id, g.user_id),
+            )
+            if row:
+                try:
+                    graph_data = R2Client().download_json(row["graph_json_url"])
+                except Exception:
+                    graph_data = None
+
+        if not graph_data:
+            try:
+                graph_data = _get_latest_graph_json(session_id, g.user_id)
+            except RuntimeError:
+                return jsonify({"error": "Could not load graph"}), 500
+
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        engine = TimeMachineEngine()
+        result = engine.build_timeline(graph_data)
+        return jsonify(result)
+
+    @app.route("/api/counterfactual/<paper_id>")
+    @require_auth
+    def api_counterfactual(paper_id: str):
+        """Run counterfactual analysis: what if this paper never existed?"""
+        session_id = session_manager.get_session_id(request)
+        allowed, headers = rate_limiter.check_sync(
+            session_id or g.user_id, "GET /api/counterfactual"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        graph_id = graph_data.get("metadata", {}).get("graph_id", "")
+        cached = db.fetchone(
+            "SELECT result_json FROM counterfactual_cache WHERE graph_id = %s AND paper_id = %s "
+            "AND computed_at > NOW() - INTERVAL '7 days'",
+            (graph_id, paper_id),
+        )
+        if cached:
+            return jsonify(cached["result_json"])
+
+        engine = CounterfactualEngine()
+        result = engine.analyze(graph_data, paper_id)
+        result_dict = result.to_dict()
+
+        if graph_id:
+            try:
+                db.execute(
+                    """
+                    INSERT INTO counterfactual_cache (graph_id, paper_id, result_json)
+                    VALUES (%s, %s, %s::jsonb)
+                    ON CONFLICT (graph_id, paper_id) DO UPDATE
+                    SET result_json=EXCLUDED.result_json, computed_at=NOW()
+                    """,
+                    (graph_id, paper_id, json.dumps(result_dict, default=str)),
+                )
+            except Exception:
+                pass
+        return jsonify(result_dict)
+
+    # ── Phase 7: Graph Public Access ────────────────────────────────────
+
+    @app.route("/api/graph/<graph_id>")
+    def api_graph_by_id(graph_id: str):
+        """
+        Public graph retrieval by graph_id.
+        Serves graphs that have a valid shared_graphs entry
+        OR are owned by the authenticated user.
+        """
+        from backend.r2_client import R2Client
+
+        user_id = getattr(g, "user_id", None)
+        if user_id:
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE graph_id = %s AND user_id = %s::uuid",
+                (graph_id, user_id),
+            )
+            if row:
+                try:
+                    return jsonify(R2Client().download_json(row["graph_json_url"]))
+                except Exception:
+                    return jsonify({"error": "Could not load graph data"}), 500
+
+        share = db.fetchone(
+            "SELECT graph_id FROM shared_graphs WHERE graph_id = %s "
+            "AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+            (graph_id,),
+        )
+        if share:
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE graph_id = %s", (graph_id,)
+            )
+            if row:
+                try:
+                    return jsonify(R2Client().download_json(row["graph_json_url"]))
+                except Exception:
+                    return jsonify({"error": "Could not load graph data"}), 500
+
+        return jsonify({"error": "Graph not found or not publicly shared"}), 404
+
+    # ── Phase 7: Adversarial Review ─────────────────────────────────────
+
+    @app.route("/api/adversarial-review", methods=["POST"])
+    @require_auth
+    def api_adversarial_review():
+        """Review a paper (PDF upload or abstract-only)."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/adversarial-review"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        reviewer = AdversarialReviewer()
+        handler = SecureFileUploadHandler()
+
+        if request.content_type and "multipart" in request.content_type:
+            file = request.files.get("pdf")
+            if not file:
+                return jsonify({"error": "No PDF file uploaded", "code": "missing_file"}), 400
+
+            pdf_bytes = file.read()
+            result = handler.validate_and_hash(pdf_bytes, file.filename or "upload.pdf")
+            if not result["valid"]:
+                return jsonify({"error": result.get("error", "Invalid file"), "code": "invalid_file"}), 400
+
+            file_hash = result["file_hash"]
+
+            count = db.fetchone(
+                "SELECT COUNT(*) AS cnt FROM adversarial_reviews "
+                "WHERE user_id = %s::uuid AND created_at > NOW() - INTERVAL '30 days'",
+                (g.user_id,),
+            )["cnt"]
+            if count >= 10:
+                return jsonify({"error": "Monthly review limit reached (10/month)", "code": "limit_reached"}), 429
+
+            existing = db.fetchone(
+                "SELECT review_id::text, result_json FROM adversarial_reviews "
+                "WHERE file_hash = %s AND user_id = %s::uuid AND status = 'done'",
+                (file_hash, g.user_id),
+            )
+            if existing and existing.get("result_json"):
+                return jsonify({"review_id": existing["review_id"], "cached": True,
+                                "result": existing["result_json"]})
+
+            row = db.execute_returning(
+                "INSERT INTO adversarial_reviews (user_id, file_hash, file_name, status) "
+                "VALUES (%s::uuid, %s, %s, 'processing') RETURNING review_id::text",
+                (g.user_id, file_hash, (file.filename or "upload.pdf")[:200]),
+            )
+            review_id = row["review_id"]
+
+            try:
+                result = reviewer.review_from_pdf(
+                    pdf_bytes, file.filename or "upload.pdf",
+                    g.user_id, review_id=review_id
+                )
+                result_json = json.dumps(result.to_dict(), default=str)
+                db.execute(
+                    "UPDATE adversarial_reviews SET status='done', result_json=%s::jsonb, "
+                    "completed_at=NOW() WHERE review_id=%s::uuid",
+                    (result_json, review_id),
+                )
+                return jsonify({"review_id": review_id, "result": result.to_dict()})
+            except Exception as exc:
+                db.execute(
+                    "UPDATE adversarial_reviews SET status='failed' WHERE review_id=%s::uuid",
+                    (review_id,),
+                )
+                app.logger.error(f"Adversarial review failed: {exc}")
+                return jsonify({"error": "Review processing failed", "code": "processing_error"}), 500
+        else:
+            data = request.get_json(silent=True) or {}
+            title = data.get("title", "")
+            abstract = data.get("abstract", "")
+            if not abstract:
+                return jsonify({"error": "abstract required", "code": "missing_param"}), 400
+            result = reviewer.review_from_abstract(title, abstract)
+            return jsonify(result.to_dict())
+
+    # ── Phase 7: Workflow Routes ────────────────────────────────────────
+
+    @app.route("/api/citation-audit/<paper_id>")
+    @require_auth
+    def api_citation_audit(paper_id: str):
+        """Audit citation practices for a paper."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "GET /api/citation-audit"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = CitationAudit().audit(paper_id, graph_data)
+        return jsonify(result.to_dict())
+
+    @app.route("/api/citation-generator", methods=["POST"])
+    @require_auth
+    def api_citation_generator():
+        """Generate citations in multiple styles."""
+        data = request.get_json(silent=True) or {}
+        paper_ids = data.get("paper_ids", [])
+        style = data.get("style", "apa")
+        all_styles = data.get("all_styles", False)
+        if not paper_ids:
+            return jsonify({"error": "paper_ids required"}), 400
+        if len(paper_ids) > 50:
+            return jsonify({"error": "Maximum 50 papers per batch"}), 400
+        gen = CitationGenerator()
+        styles = [style] if style else ["apa"]
+        result = gen.generate(paper_ids, styles=styles, all_styles=all_styles)
+        return jsonify(result)
+
+    @app.route("/api/reading-prioritizer", methods=["POST"])
+    @require_auth
+    def api_reading_prioritizer():
+        """Prioritize a reading list from the current graph."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/reading-prioritizer"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        data = request.get_json(silent=True) or {}
+        max_items = data.get("max_items", 20)
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = ReadingPrioritizer().prioritize(graph_data, max_items=max_items)
+        return jsonify({"ranked": result, "total": len(result)})
+
+    @app.route("/api/paper-positioning", methods=["POST"])
+    @require_auth
+    def api_paper_positioning():
+        """Position a paper in the intellectual landscape."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/paper-positioning"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        data = request.get_json(silent=True) or {}
+        paper_id = data.get("paper_id", "")
+        title = data.get("title", "")
+        abstract = data.get("abstract", "")
+        tool = PaperPositioningTool()
+
+        if paper_id:
+            session_id = session_manager.get_session_id(request)
+            try:
+                graph_data = _get_latest_graph_json(session_id, g.user_id)
+            except RuntimeError:
+                return jsonify({"error": "Could not load graph"}), 500
+            result = tool.position_by_paper_id(paper_id, graph_data or {"nodes": [], "edges": []})
+        elif abstract:
+            result = tool.position_by_abstract(title, abstract)
+        else:
+            return jsonify({"error": "paper_id or abstract required"}), 400
+
+        return jsonify(result.to_dict())
+
+    @app.route("/api/rewrite-suggester", methods=["POST"])
+    @require_auth
+    def api_rewrite_suggester():
+        """Suggest a rewrite for a related-work section."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/rewrite-suggester"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        data = request.get_json(silent=True) or {}
+        related_work = data.get("related_work_text", "")
+        paper_title = data.get("paper_title", "")
+        if not related_work or not related_work.strip():
+            return jsonify({"error": "related_work_text required"}), 400
+        if len(related_work) > 10000:
+            return jsonify({"error": "Text too long — maximum 10,000 characters"}), 400
+        result = RewriteSuggester().suggest(related_work, paper_title)
+        return jsonify(result.to_dict())
+
+    # ── Phase 7: Persona Routes ─────────────────────────────────────────
+
+    @app.route("/api/persona", methods=["POST"])
+    @require_auth
+    def api_set_persona():
+        """Set the active persona mode."""
+        data = request.get_json(silent=True) or {}
+        mode = data.get("mode", "explorer")
+        if mode not in ("explorer", "critic", "innovator", "historian"):
+            return jsonify({"error": "Invalid mode"}), 400
+        session_id = session_manager.get_session_id(request)
+        if session_id:
+            db.execute(
+                "UPDATE sessions SET persona_mode = %s WHERE session_id = %s",
+                (mode, session_id),
+            )
+        if hasattr(g, "user_id") and g.user_id:
+            db.execute(
+                "UPDATE users SET default_persona = %s WHERE user_id = %s::uuid",
+                (mode, g.user_id),
+            )
+        return jsonify({"mode": mode, "config": PersonaEngine().get_config(mode).to_dict()})
+
+    @app.route("/api/persona")
+    def api_get_persona():
+        """Get the current persona mode."""
+        session_id = session_manager.get_session_id(request)
+        mode = "explorer"
+        if session_id:
+            row = db.fetchone(
+                "SELECT persona_mode FROM sessions WHERE session_id = %s", (session_id,)
+            )
+            if row:
+                mode = row.get("persona_mode") or "explorer"
+        return jsonify(PersonaEngine().get_config(mode).to_dict())
+
+    # ── Phase 7: Insight Feed ───────────────────────────────────────────
+
+    @app.route("/api/insights/<seed_paper_id>")
+    @require_session
+    def api_insights(seed_paper_id: str):
+        """Generate insight feed for a graph."""
+        session_id = g.session_id
+        try:
+            from backend.r2_client import R2Client
+            row = db.fetchone(
+                "SELECT g.graph_json_url FROM graphs g "
+                "JOIN session_graphs sg ON sg.graph_id = g.graph_id "
+                "WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1",
+                (session_id,),
+            )
+            if not row:
+                return jsonify({"insights": []})
+            graph_data = R2Client().download_json(row["graph_json_url"])
+        except Exception:
+            return jsonify({"insights": []})
+
+        row_s = db.fetchone(
+            "SELECT persona_mode FROM sessions WHERE session_id = %s", (session_id,)
+        )
+        mode = (row_s.get("persona_mode") or "explorer") if row_s else "explorer"
+        insights = InsightEngine().generate_feed(graph_data, persona_mode=mode)
+        return jsonify({"insights": insights, "persona_mode": mode})
+
+    # ── Phase 7: Research Journal Export ─────────────────────────────────
+
+    @app.route("/api/action-log/<seed_paper_id>/export")
+    @require_auth
+    def api_export_research_journal(seed_paper_id: str):
+        """Export the action log as a downloadable text report."""
+        session_id = session_manager.get_session_id(request)
+        rows = db.fetchall(
+            "SELECT action_type, action_data, timestamp FROM action_log "
+            "WHERE session_id = %s ORDER BY timestamp ASC",
+            (session_id,),
+        )
+        if not rows:
+            return jsonify({"error": "No action log entries found for this session"}), 404
+
+        paper = db.fetchone(
+            "SELECT title FROM papers WHERE paper_id = %s", (seed_paper_id,)
+        )
+        title = (paper.get("title") if paper else None) or "Research Session"
+
+        # Generate plain-text journal (no ExportGenerator.generate_pdf dependency)
+        lines = [f"Research Journal: {title}", "=" * 60, ""]
+        for r in rows:
+            ts = str(r["timestamp"])
+            action = r["action_type"]
+            detail = (r["action_data"] or {}).get("description", "") if isinstance(r.get("action_data"), dict) else ""
+            lines.append(f"[{ts}] {action}: {detail}")
+        text_content = "\n".join(lines)
+
+        return Response(
+            text_content.encode("utf-8"),
+            mimetype="text/plain",
+            headers={
+                "Content-Disposition": f'attachment; filename="arivu-journal-{seed_paper_id[:8]}.txt"'
+            },
+        )
+
+    # ── Phase 7: Shareable Graph Links ──────────────────────────────────
+
+    @app.route("/api/share", methods=["POST"])
+    @require_auth
+    def api_create_share():
+        """Create a shareable link for the current graph."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/share"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        session_id = session_manager.get_session_id(request)
+        row = None
+        if session_id:
+            row = db.fetchone(
+                """
+                SELECT g.graph_id FROM graphs g
+                JOIN session_graphs sg ON sg.graph_id = g.graph_id
+                WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1
+                """,
+                (session_id,),
+            )
+        if not row:
+            row = db.fetchone(
+                "SELECT graph_id FROM graphs WHERE user_id = %s::uuid "
+                "ORDER BY created_at DESC LIMIT 1",
+                (g.user_id,),
+            )
+
+        if not row:
+            return jsonify({"error": "No graph to share. Build a graph first."}), 404
+
+        manager = LabManager()
+        token = manager.create_share_link(
+            graph_id=str(row["graph_id"]),
+            user_id=g.user_id,
+        )
+        base_url = Config.API_BASE_URL or f"https://{Config.CUSTOM_DOMAIN}"
+        return jsonify({"token": token, "url": f"{base_url}/share/{token}"})
+
+    @app.route("/share/<token>")
+    def view_shared_graph(token: str):
+        """Render the shared graph page."""
+        share = LabManager().get_share(token)
+        if not share:
+            return "Shared graph not found or has expired.", 404
+        base_url = Config.API_BASE_URL or f"https://{Config.CUSTOM_DOMAIN}"
+        return render_template(
+            "shared_graph.html",
+            share=share,
+            share_url=f"{base_url}/share/{token}",
+        )
+
+    @app.route("/api/shares")
+    @require_auth
+    def api_list_shares():
+        """List all shared graph links for the authenticated user."""
+        return jsonify({"shares": LabManager().list_shares(g.user_id)})
+
+    @app.route("/api/shares/<token>", methods=["DELETE"])
+    @require_auth
+    def api_delete_share(token: str):
+        """Delete a shared graph link."""
+        return jsonify({"success": LabManager().delete_share(token, g.user_id)})
+
+    # ── Phase 7: Lab Management ─────────────────────────────────────────
+
+    @app.route("/api/lab/members", methods=["GET"])
+    @require_auth
+    def api_lab_members():
+        """List lab members."""
+        return jsonify({"members": LabManager().list_members(g.user_id)})
+
+    @app.route("/api/lab/invite", methods=["POST"])
+    @require_auth
+    def api_lab_invite():
+        """Send a lab invitation."""
+        allowed, headers = rate_limiter.check_sync(
+            g.user_id, "POST /api/lab/invite"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").lower().strip()
+        if not email:
+            return jsonify({"error": "email required"}), 400
+
+        manager = LabManager()
+        result = manager.invite_member(g.user_id, email)
+        if not result.get("success"):
+            return jsonify({"error": result.get("error", "Invite failed")}), 400
+        return jsonify({"success": True, "message": f"Invite sent to {email}."})
+
+    @app.route("/lab/accept")
+    def lab_accept_invite():
+        """Redirect invite link to login with invite token."""
+        from flask import redirect
+        token = request.args.get("token", "")
+        if not token:
+            return redirect("/login")
+        return redirect(f"/login?invite={token}")
+
+    @app.route("/api/lab/accept", methods=["POST"])
+    @require_auth
+    def api_lab_accept_invite():
+        """Accept a lab invitation."""
+        data = request.get_json(silent=True) or {}
+        token = data.get("token", "")
+        if not token:
+            return jsonify({"error": "token required"}), 400
+        result = LabManager().accept_invite(token, g.user_id)
+        return jsonify(result)
+
+    @app.route("/api/lab/members/<member_id>", methods=["DELETE"])
+    @require_auth
+    def api_lab_remove_member(member_id: str):
+        """Remove a member from the lab."""
+        result = LabManager().remove_member(g.user_id, member_id)
+        return jsonify(result)
+
+    # ── Phase 7: Supervisor Dashboard ───────────────────────────────────
+
+    @app.route("/supervisor")
+    @require_auth
+    def supervisor_dashboard():
+        """Supervisor Dashboard page."""
+        data = LabManager().get_supervisor_data(g.user_id)
+        return render_template("supervisor.html", data=data)
+
+    @app.route("/api-docs")
+    def api_docs():
+        """Public API documentation page."""
+        return render_template("api_docs.html")
+
+    # ── Phase 7: Guided Discovery ───────────────────────────────────────
+
+    @app.route("/api/guided-discovery", methods=["POST"])
+    @require_session
+    def api_guided_discovery():
+        """Process onboarding answers and return a feature pathway."""
+        allowed, headers = rate_limiter.check_sync(
+            g.session_id, "POST /api/guided-discovery"
+        )
+        if not allowed:
+            return jsonify(rate_limiter.get_429_response(headers)), 429, headers
+
+        data = request.get_json(silent=True) or {}
+        relationship = data.get("relationship", "")
+        context = data.get("context", "")
+
+        pathway = _build_discovery_pathway(relationship, context)
+        session_id = g.session_id
+        db.execute(
+            "UPDATE sessions SET persona_mode = %s WHERE session_id = %s",
+            (pathway["suggested_persona"], session_id),
+        )
+        return jsonify(pathway)
+
+    # ── Phase 7: Email Change ───────────────────────────────────────────
+
+    @app.route("/api/account/request-email-change", methods=["POST"])
+    @require_auth
+    def api_request_email_change():
+        """Request an email change — sends verification to new email."""
+        data = request.get_json(silent=True) or {}
+        new_email = (data.get("new_email") or "").strip().lower()
+        password = data.get("password", "")
+
+        if not new_email or "@" not in new_email:
+            return jsonify({"error": "Valid email required"}), 400
+
+        # Verify password
+        import bcrypt as _bcrypt
+        user = db.fetchone(
+            "SELECT password_hash, email FROM users WHERE user_id = %s::uuid",
+            (g.user_id,),
+        )
+        if not user or not _bcrypt.checkpw(
+            password.encode(), (user.get("password_hash") or "").encode()
+        ):
+            return jsonify({"error": "wrong_password"}), 403
+
+        if user.get("email", "").lower() == new_email:
+            return jsonify({"error": "New email is the same as current"}), 400
+
+        # Check if email is taken
+        existing = db.fetchone(
+            "SELECT user_id FROM users WHERE email = %s", (new_email,)
+        )
+        if existing:
+            return jsonify({"error": "Email already in use"}), 409
+
+        # Create token
+        import secrets as _secrets
+        token = _secrets.token_urlsafe(32)
+        db.execute(
+            """
+            INSERT INTO email_change_tokens (user_id, new_email, token)
+            VALUES (%s::uuid, %s, %s)
+            """,
+            (g.user_id, new_email, token),
+        )
+
+        # Send verification email
+        try:
+            from backend.mailer import send_email_change_verification
+            base_url = Config.API_BASE_URL or f"https://{Config.CUSTOM_DOMAIN}"
+            send_email_change_verification(
+                new_email, token, f"{base_url}/api/account/confirm-email-change?token={token}"
+            )
+        except Exception as exc:
+            app.logger.warning(f"Email change verification send failed: {exc}")
+
+        return jsonify({"success": True, "message": "Verification email sent to new address."})
+
+    @app.route("/api/account/confirm-email-change")
+    def api_confirm_email_change():
+        """Confirm email change via token (GET link from email)."""
+        token = request.args.get("token", "")
+        if not token:
+            return "Missing token.", 400
+
+        row = db.fetchone(
+            """
+            SELECT user_id, new_email FROM email_change_tokens
+            WHERE token = %s AND used_at IS NULL AND expires_at > NOW()
+            """,
+            (token,),
+        )
+        if not row:
+            return "Invalid or expired token.", 400
+
+        db.execute(
+            "UPDATE users SET email = %s WHERE user_id = %s::uuid",
+            (row["new_email"], str(row["user_id"])),
+        )
+        db.execute(
+            "UPDATE email_change_tokens SET used_at = NOW() WHERE token = %s",
+            (token,),
+        )
+        return "Email updated successfully. You can close this page."
+
+    app.logger.info("Arivu Phase 7 app ready")
     return app
+
+
+def _build_discovery_pathway(relationship: str, context: str) -> dict:
+    """Build a guided discovery pathway based on user's relationship to the field."""
+    PATHWAYS = {
+        "new_field": {
+            "suggested_persona": "explorer",
+            "primary_feature": {"label": "Intellectual Genealogy Story", "route": "/api/genealogy"},
+            "secondary_feature": {"label": "Research DNA Profile", "route": "/api/dna"},
+            "tertiary_feature": {"label": "Reading Prioritizer", "route": "/api/reading-prioritizer"},
+            "guide_message": "Let me show you how this field evolved. Start with the genealogy story.",
+        },
+        "writing": {
+            "suggested_persona": "innovator",
+            "primary_feature": {"label": "Research DNA Profile", "route": "/api/dna"},
+            "secondary_feature": {"label": "Citation Audit", "route": "/api/citation-audit"},
+            "tertiary_feature": {"label": "Paper Positioning", "route": "/api/paper-positioning"},
+            "guide_message": "I'll help you position your contribution. Start with the DNA profile.",
+        },
+        "reviewing": {
+            "suggested_persona": "critic",
+            "primary_feature": {"label": "Originality Mapper", "route": "/api/originality"},
+            "secondary_feature": {"label": "Citation Audit", "route": "/api/citation-audit"},
+            "tertiary_feature": {"label": "Adversarial Reviewer", "route": "/api/adversarial-review"},
+            "guide_message": "I'll surface what reviewers look for. Start with originality mapping.",
+        },
+        "curious": {
+            "suggested_persona": "historian",
+            "primary_feature": {"label": "Interactive Pruning", "route": "/api/prune"},
+            "secondary_feature": {"label": "Time Machine", "route": "/api/time-machine"},
+            "tertiary_feature": {"label": "Extinction Events", "route": "/api/time-machine"},
+            "guide_message": "Start by removing a foundational paper and watching the field collapse.",
+        },
+    }
+    return PATHWAYS.get(relationship, PATHWAYS["curious"])
 
 
 def _paper_to_dict(paper) -> dict:
