@@ -17,6 +17,7 @@ from_json() for reconstructing cached graphs, and data_completeness for
 coverage-gated features like gap finding.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -109,8 +110,21 @@ class AncestryGraph:
         self.nodes: dict[str, Paper] = {}          # paper_id → Paper
         self.seed_paper_id: Optional[str] = None
         self._job_id: Optional[str] = None
+        self._graph_id: Optional[str] = None       # stable SHA256-based ID
         self._resolver: SmartPaperResolver = resolver
         self._nlp: InheritanceDetector = InheritanceDetector()
+
+    # ─── Stable graph_id computation ─────────────────────────────────────────
+
+    def _compute_graph_id(self, seed_paper_id: str, session_id: str) -> str:
+        """
+        Canonical graph_id: SHA256(seed_paper_id + "_" + session_id)[:32].
+        Stable across rebuilds — the same user/session rebuilding the same paper
+        gets the same graph_id. Phase 8 caching (graph_memory_state,
+        live_subscriptions) depends on this stability.
+        """
+        raw = f"{seed_paper_id}_{session_id}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     # ─── Reconstruct from cached JSON ──────────────────────────────────────────
 
@@ -149,7 +163,8 @@ class AncestryGraph:
 
         instance.metadata = graph_json.get("metadata", {})
         instance.seed_paper_id = instance.metadata.get("seed_paper_id")
-        instance._job_id = instance.metadata.get("graph_id")
+        instance._graph_id = instance.metadata.get("graph_id")
+        instance._job_id = instance._graph_id  # backward compat
         instance._resolver = resolver
         instance._nlp = InheritanceDetector()
         return instance
@@ -219,6 +234,17 @@ class AncestryGraph:
         seed_paper = await self._resolver.resolve(canonical_id, id_type)
         all_papers[seed_paper.paper_id] = seed_paper
         self.seed_paper_id = seed_paper.paper_id
+
+        # Compute stable graph_id from seed_paper_id + session_id
+        try:
+            job_row = db.fetchone(
+                "SELECT session_id FROM build_jobs WHERE job_id = %s",
+                (self._job_id,),
+            )
+            session_id = (job_row or {}).get("session_id", self._job_id or "")
+        except Exception:
+            session_id = self._job_id or ""
+        self._graph_id = self._compute_graph_id(seed_paper.paper_id, session_id)
 
         max_depth = determine_crawl_depth(seed_paper, user_goal)
         logger.info(f"Building graph: seed={seed_paper.paper_id[:8]}… depth={max_depth}")
@@ -313,18 +339,18 @@ class AncestryGraph:
         graph_json = self._export_to_json(seed_paper, all_papers)
         build_time = time.time() - build_start
 
-        # Cache to R2
+        # Cache to R2 — use stable graph_id for the key
         from backend.r2_client import R2Client
         from backend.config import config as _config
         r2 = R2Client(_config)
-        graph_key = f"graphs/{self._job_id}.json"
+        graph_key = f"graphs/{self._graph_id}.json"
         try:
             r2.put_json(graph_key, graph_json)
             logger.info(f"Graph cached to R2: {graph_key}")
         except Exception as e:
             logger.warning(f"R2 cache failed (non-fatal): {e}")
 
-        # Persist graph record to DB
+        # Persist graph record to DB — use stable graph_id
         db.execute(
             """
             INSERT INTO graphs (
@@ -335,11 +361,16 @@ class AncestryGraph:
                 created_at, last_accessed, computed_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW(), NOW())
             ON CONFLICT (graph_id) DO UPDATE SET
+                graph_json_url = EXCLUDED.graph_json_url,
+                node_count = EXCLUDED.node_count,
+                edge_count = EXCLUDED.edge_count,
+                model_version = EXCLUDED.model_version,
+                build_time_seconds = EXCLUDED.build_time_seconds,
                 last_accessed = NOW(),
                 computed_at = NOW()
             """,
             (
-                self._job_id,
+                self._graph_id,
                 seed_paper.paper_id,
                 graph_key,
                 len(graph_json["nodes"]),
@@ -354,16 +385,18 @@ class AncestryGraph:
 
         # ── Step 8: Post-build bookkeeping ────────────────────────────────
         # Compute leaderboard, DNA, diversity; link session → graph
+        # Re-fetch session_id for bookkeeping (already computed above but may
+        # have changed scope after embedding/NLP steps)
         try:
-            job_row = db.fetchone(
+            job_row2 = db.fetchone(
                 "SELECT session_id FROM build_jobs WHERE job_id = %s",
                 (self._job_id,),
             )
-            session_id = (job_row or {}).get("session_id", "")
+            session_id_bk = (job_row2 or {}).get("session_id", "")
         except Exception:
-            session_id = ""
+            session_id_bk = ""
 
-        self._on_graph_complete(self._job_id, session_id)
+        self._on_graph_complete(self._graph_id, session_id_bk)
 
         await self._emit("done", "Graph ready.", graph=graph_json)
         return graph_json
@@ -621,7 +654,7 @@ class AncestryGraph:
                 "total_edges":      len(edges),
                 "model_version":    MODEL_VERSION,
                 "build_timestamp":  time.time(),
-                "graph_id":         self._job_id,
+                "graph_id":         self._graph_id or self._job_id,
             },
         }
 

@@ -14,7 +14,7 @@ import backend.db as db
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_STYLES = ("apa", "mla", "chicago", "bibtex", "ieee", "harvard")
+SUPPORTED_STYLES = ("apa", "mla", "chicago", "bibtex", "ieee", "harvard", "vancouver")
 
 
 @dataclass
@@ -143,6 +143,17 @@ class CitationGenerator:
                 base += f" Available at: https://doi.org/{doi}."
             return base
 
+        elif style == "vancouver":
+            # Vancouver (biomedical): Surname Initials (no periods), up to 6 authors then et al.
+            vanc_authors = self._vancouver_authors(authors)
+            base = f"{vanc_authors}. {title}."
+            if venue:
+                base += f" {venue}."
+            base += f" {year}"
+            if doi:
+                base += f". doi:{doi}"
+            return base + "."
+
         return f"{author_str} ({year}). {title}."
 
     def _format_authors(self, authors: list, style: str) -> str:
@@ -177,3 +188,22 @@ class CitationGenerator:
         if len(parts) >= 2:
             return f"{parts[-1]}, {parts[0][0]}."
         return name
+
+    def _vancouver_authors(self, authors: list) -> str:
+        """Vancouver format: 'Surname AB' (no periods/commas in initials), up to 6 then et al."""
+        if not authors:
+            return "Unknown Author"
+        formatted = []
+        limit = min(len(authors), 6)
+        for a in authors[:limit]:
+            parts = a.strip().split()
+            if len(parts) >= 2:
+                surname = parts[-1]
+                initials = "".join(p[0].upper() for p in parts[:-1])
+                formatted.append(f"{surname} {initials}")
+            else:
+                formatted.append(a)
+        result = ", ".join(formatted)
+        if len(authors) > 6:
+            result += ", et al"
+        return result

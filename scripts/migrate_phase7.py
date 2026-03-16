@@ -16,14 +16,26 @@ PHASE_7_SQL = """
 -- ── Shared graph links (shareable read-only URLs) ───────────────────────────
 CREATE TABLE IF NOT EXISTS shared_graphs (
     share_id        UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    graph_id        TEXT        NOT NULL,
-    user_id         UUID        REFERENCES users(user_id) ON DELETE SET NULL,
     share_token     TEXT        UNIQUE NOT NULL,
+    graph_id        TEXT        NOT NULL,
+    user_id         UUID        REFERENCES users(user_id) ON DELETE CASCADE,
+    seed_paper_id   TEXT,
+    seed_title      TEXT,
+    view_mode       TEXT        NOT NULL DEFAULT 'force',
+    view_state      JSONB       NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at      TIMESTAMPTZ,
-    view_count      INT         NOT NULL DEFAULT 0
+    view_count      INT         NOT NULL DEFAULT 0,
+    last_viewed_at  TIMESTAMPTZ
 );
+-- Idempotent column additions for existing DBs
+ALTER TABLE shared_graphs ADD COLUMN IF NOT EXISTS seed_paper_id TEXT;
+ALTER TABLE shared_graphs ADD COLUMN IF NOT EXISTS seed_title TEXT;
+ALTER TABLE shared_graphs ADD COLUMN IF NOT EXISTS view_mode TEXT NOT NULL DEFAULT 'force';
+ALTER TABLE shared_graphs ADD COLUMN IF NOT EXISTS view_state JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE shared_graphs ADD COLUMN IF NOT EXISTS last_viewed_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_shared_graphs_token ON shared_graphs(share_token);
+CREATE INDEX IF NOT EXISTS idx_shared_graphs_user  ON shared_graphs(user_id);
 CREATE INDEX IF NOT EXISTS idx_shared_graphs_graph ON shared_graphs(graph_id);
 
 -- ── Vocabulary snapshots (per-year, per-graph, for Time Machine) ────────────

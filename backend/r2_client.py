@@ -160,6 +160,10 @@ class R2Client:
     def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
         self.put(key, data, content_type)
 
+    def upload_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
+        """Alias for put() — Phase 8 forward-compat (secure_upload.py, live_mode.py)."""
+        self.put(key, data, content_type)
+
     # ─── Phase 5 §0.4 — presigned URL for export downloads ──────────────
 
     def presigned_url(self, key: str, expires_in: int = 3600) -> str:

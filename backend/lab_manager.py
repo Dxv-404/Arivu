@@ -263,13 +263,16 @@ class LabManager:
         self,
         graph_id: str,
         user_id: str,
+        seed_paper_id: str = "",
+        seed_title: str = "",
+        view_mode: str = "force",
+        view_state: dict = None,
         expires_days: int = None,
     ) -> str:
         """
         Create a shareable link for a graph.
         Returns the share token.
-        Schema: shared_graphs(share_id, graph_id, user_id, share_token,
-                              created_at, expires_at, view_count).
+        FIX (GAP-P7-N7): Full schema per PHASE_7.md lines 245-258.
         """
         token = secrets.token_urlsafe(24)
         expires_at = None
@@ -278,10 +281,13 @@ class LabManager:
 
         db.execute(
             """
-            INSERT INTO shared_graphs (share_token, graph_id, user_id, expires_at)
-            VALUES (%s, %s, %s::uuid, %s)
+            INSERT INTO shared_graphs
+              (share_token, graph_id, user_id, seed_paper_id, seed_title,
+               view_mode, view_state, expires_at)
+            VALUES (%s, %s, %s::uuid, %s, %s, %s, %s::jsonb, %s)
             """,
-            (token, graph_id, user_id, expires_at),
+            (token, graph_id, user_id, seed_paper_id, seed_title,
+             view_mode, json.dumps(view_state or {}), expires_at),
         )
         try:
             db.execute(
@@ -296,7 +302,8 @@ class LabManager:
         """Get a share by token. Returns None if expired or not found."""
         row = db.fetchone(
             """
-            SELECT share_token, graph_id, user_id::text, created_at, expires_at, view_count
+            SELECT share_token, graph_id, user_id::text, seed_paper_id, seed_title,
+                   view_mode, view_state, created_at, expires_at, view_count
             FROM shared_graphs
             WHERE share_token = %s
               AND (expires_at IS NULL OR expires_at > NOW())
@@ -306,7 +313,8 @@ class LabManager:
         if not row:
             return None
         db.execute(
-            "UPDATE shared_graphs SET view_count = view_count + 1 WHERE share_token = %s",
+            "UPDATE shared_graphs SET view_count = view_count + 1, "
+            "last_viewed_at = NOW() WHERE share_token = %s",
             (token,),
         )
         return dict(row)
@@ -315,7 +323,8 @@ class LabManager:
         """List all shares for a user."""
         rows = db.fetchall(
             """
-            SELECT share_token, graph_id, created_at, expires_at, view_count
+            SELECT share_token, graph_id, seed_paper_id, seed_title,
+                   view_mode, created_at, expires_at, view_count
             FROM shared_graphs
             WHERE user_id = %s::uuid
             ORDER BY created_at DESC LIMIT 50

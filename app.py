@@ -1987,22 +1987,28 @@ def create_app():
         if not allowed:
             return jsonify(rate_limiter.get_429_response(headers)), 429, headers
 
+        data = request.get_json(silent=True) or {}
         session_id = session_manager.get_session_id(request)
         row = None
         if session_id:
             row = db.fetchone(
                 """
-                SELECT g.graph_id FROM graphs g
+                SELECT g.graph_id, g.seed_paper_id, p.title AS seed_title
+                FROM graphs g
                 JOIN session_graphs sg ON sg.graph_id = g.graph_id
+                LEFT JOIN papers p ON p.paper_id = g.seed_paper_id
                 WHERE sg.session_id = %s ORDER BY g.created_at DESC LIMIT 1
                 """,
                 (session_id,),
             )
         if not row:
             row = db.fetchone(
-                "SELECT graph_id FROM graphs WHERE user_id = %s::uuid "
-                "ORDER BY created_at DESC LIMIT 1",
-                (g.user_id,),
+                """
+                SELECT g.graph_id, g.seed_paper_id, p.title AS seed_title
+                FROM graphs g
+                LEFT JOIN papers p ON p.paper_id = g.seed_paper_id
+                ORDER BY g.created_at DESC LIMIT 1
+                """,
             )
 
         if not row:
@@ -2012,6 +2018,10 @@ def create_app():
         token = manager.create_share_link(
             graph_id=str(row["graph_id"]),
             user_id=g.user_id,
+            seed_paper_id=row.get("seed_paper_id", ""),
+            seed_title=row.get("seed_title", ""),
+            view_mode=data.get("view_mode", "force"),
+            view_state=data.get("view_state"),
         )
         base_url = Config.API_BASE_URL or f"https://{Config.CUSTOM_DOMAIN}"
         return jsonify({"token": token, "url": f"{base_url}/share/{token}"})

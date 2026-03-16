@@ -21,12 +21,13 @@ class CitationGeneratorUI {
 
     /** @type {Array<{id: string, label: string}>} */
     this.styles = [
-      { id: 'apa',     label: 'APA' },
-      { id: 'mla',     label: 'MLA' },
-      { id: 'chicago', label: 'Chicago' },
-      { id: 'bibtex',  label: 'BibTeX' },
-      { id: 'ieee',    label: 'IEEE' },
-      { id: 'harvard', label: 'Harvard' },
+      { id: 'apa',       label: 'APA' },
+      { id: 'mla',       label: 'MLA' },
+      { id: 'chicago',   label: 'Chicago' },
+      { id: 'bibtex',    label: 'BibTeX' },
+      { id: 'ieee',      label: 'IEEE' },
+      { id: 'harvard',   label: 'Harvard' },
+      { id: 'vancouver', label: 'Vancouver' },
     ];
   }
 
