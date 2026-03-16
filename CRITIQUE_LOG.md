@@ -624,3 +624,218 @@ Phase 8 modules would fail at runtime with AttributeError when calling upload_by
 
 ### Resolution
 Added `upload_bytes()` as thin alias for `put()`, matching the existing alias pattern.
+
+---
+
+## [2026-03-16] [PHASE 8] [DRIFT] chat_guide.py persona names mismatch
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/chat_guide.py — `_get_persona_framing()` dict keys
+**Severity:** HIGH
+
+### Finding
+`_get_persona_framing()` used keys `explorer/strategist/builder/skeptic`, but `app.py` L1950 validates persona input against `("explorer", "critic", "innovator", "historian")`. The keys `strategist`, `builder`, and `skeptic` could never be reached through the normal UI path — users switching to "critic" persona would silently fall through to the default "explorer" framing.
+
+### Impact
+3 of 4 persona framings were unreachable. Users selecting critic/innovator/historian persona always got explorer framing.
+
+### Resolution
+Changed dict keys to `explorer/critic/innovator/historian` to match app.py persona validation.
+
+---
+
+## [2026-03-16] [PHASE 8] [SPEC_GAP] scripts/live_monitor_cron.py never created
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** scripts/live_monitor_cron.py — live mode nightly cron
+**Severity:** HIGH
+
+### Finding
+PHASE_8.md §6 provides the complete implementation for `scripts/live_monitor_cron.py` (nightly cron for live mode subscriptions). The file was never created during Phase 8 implementation, despite being listed in CLAUDE.md Part 7 and referenced by `backend/mailer.py` L47.
+
+### Impact
+Live Mode subscriptions would never receive new citation alerts, paradigm shift notifications, retraction alerts, or weekly digests.
+
+### Resolution
+Created `scripts/live_monitor_cron.py` from PHASE_8.md §6 spec. Fixed spec bug: `Config.SEMANTIC_SCHOLAR_API_KEY` → `Config.S2_API_KEY` (actual config attribute). Removed unused `import httpx` from `_check_gap_filled()`.
+
+---
+
+## [2026-03-16] [PHASE 8] [SPEC_GAP] public_api.py missing Phase 8 endpoints
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** backend/public_api.py — 3 Phase 8 API endpoints
+**Severity:** HIGH
+
+### Finding
+Rate limiter defines entries for 3 Phase 8 public API endpoints:
+- `API GET /researchers/{id}/profile` (200/hour)
+- `API POST /literature-review` (10/hour)
+- `API GET /papers/{id}/journalism` (200/hour)
+These endpoints were never added to `public_api.py`.
+
+### Impact
+Public API users could not access researcher profiles, literature reviews, or journalism analysis via the /v1/ API.
+
+### Resolution
+Added 3 endpoints: `v1_researcher_profile`, `v1_literature_review`, `v1_paper_journalism`. All follow existing patterns (require_api_key, R2 graph fetch, module instantiation).
+
+---
+
+## [2026-03-16] [PHASE 8] [DRIFT] researcher_profiles.py hashlib import inside for-loop
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** backend/researcher_profiles.py — `build_profile()` method
+**Severity:** LOW
+
+### Finding
+`import hashlib` statement at L83 was inside a for-loop iterating over paper authors. While Python caches imports after the first call, placing imports inside loops is poor practice and adds unnecessary overhead per iteration.
+
+### Impact
+Minor performance penalty. No functional impact (Python's import system caches modules).
+
+### Resolution
+Moved `import hashlib` to module level (top of file, line 7).
+
+---
+
+## [2026-03-16] [PHASE 8] [SPEC_GAP] PHASE_8_v1.md missing — 14 modules reconstructed
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** 14 Phase 8 intelligence modules
+**Severity:** HIGH
+
+### Finding
+PHASE_8.md §2-§4 reference "Copy verbatim from Phase 8 v1" for 14 intelligence modules, but no PHASE_8_v1.md file exists. Each module had to be written from scratch using class names, method signatures, and feature descriptions from PHASE_8.md. See ADR-020.
+
+### Impact
+All 14 intelligence modules needed reconstruction from spec context rather than verbatim copying.
+
+### Resolution
+All 14 modules implemented from scratch, validated with 34 tests in test_phase8.py. All tests pass.
+
+---
+
+## [2026-03-16] [PHASE 8] [DRIFT] CONTEXT.md documented wrong persona names
+
+**Type:** DRIFT
+**Status:** RESOLVED
+**Affects:** CONTEXT.md — Architecture Notes line 42
+**Severity:** LOW
+
+### Finding
+CONTEXT.md L42 stated "4 persona framings wired into ChatGuide (explorer, strategist, builder, skeptic)" — these are the wrong persona names that were in chat_guide.py before the fix.
+
+### Impact
+Future sessions reading CONTEXT.md would see incorrect persona names, potentially introducing further drift.
+
+### Resolution
+Updated to "4 persona framings wired into ChatGuide (explorer, critic, innovator, historian)".
+
+---
+
+## [2026-03-16] [PHASE 8] [SPEC_GAP] live_monitor_cron.py spec used wrong Config attribute
+
+**Type:** SPEC_GAP
+**Status:** RESOLVED
+**Affects:** scripts/live_monitor_cron.py — S2 API key header
+**Severity:** MEDIUM
+
+### Finding
+PHASE_8.md §6 L2733-2734 uses `getattr(Config, "SEMANTIC_SCHOLAR_API_KEY", "")`. The actual config attribute is `Config.S2_API_KEY` (defined in config.py L33). `SEMANTIC_SCHOLAR_API_KEY` does not exist.
+
+### Impact
+Live monitor would never send the S2 API key header, causing rate limiting to 1 req/s instead of 10 req/s.
+
+### Resolution
+Changed to `Config.S2_API_KEY` in the created file.
+
+---
+
+## [2026-03-16] [PHASE 8] [CRITIQUE] Phase 8 audit — all verified clean items
+
+**Type:** CRITIQUE
+**Status:** RESOLVED
+**Affects:** Phase 8 codebase integrity
+**Severity:** LOW
+
+### Finding
+Post-implementation audit verified 13 items as clean:
+- V1: Git branch on `main` ✓
+- V2: v1.0 tag exists ✓
+- V3: `edge_flags` not in backend code ✓
+- V4: edge_id uses `:` separator ✓
+- V5: `@require_tier` not on routes ✓
+- V6: `LLMClient()` only in factory ✓
+- V11: README has no billing ✓
+- V12: `retractions` not in backend SQL ✓
+- V13: Rate limiter uses 2-tuples ✓
+- V14: science_journalism returns correct type ✓
+- V15: RuntimeError handling consistent ✓
+- V18: `edge_feedback` used correctly ✓
+- V19: `send_email` public function exists ✓
+
+### Impact
+Confirms Phase 8 implementation is architecturally sound — no banned patterns, correct table names, correct interfaces.
+
+### Resolution
+N/A — verification-only entry. All items confirmed clean.
+
+---
+
+## [2026-03-16] [PHASE 8] [CRITIQUE] CONFLICT-003 pre-resolution confirmed
+
+**Type:** CRITIQUE
+**Status:** RESOLVED
+**Affects:** CLAUDE.md CONFLICT-003 — `retractions` vs `retraction_watch`
+**Severity:** LOW
+
+### Finding
+CLAUDE.md CONFLICT-003 warned that Phase 8 §0.1 uses `SELECT COUNT(*) FROM retractions`. Post-audit confirms: the backend code uses `retraction_watch` throughout. The Phase 8 spec's `retractions` reference was indeed a typo as suspected.
+
+### Impact
+None — correct table name was used in implementation.
+
+### Resolution
+Confirmed CONFLICT-003 was a spec typo. No code changes needed.
+
+---
+
+## [2026-03-16] [PHASE 8] [CRITIQUE] CONFLICT-006 pre-resolution confirmed
+
+**Type:** CRITIQUE
+**Status:** RESOLVED
+**Affects:** CLAUDE.md CONFLICT-006 — graph_id format
+**Severity:** LOW
+
+### Finding
+CLAUDE.md CONFLICT-006 noted the SHA256 code version is authoritative over the prose version for graph_id. Post-audit confirms: `graph_engine.py` uses `hashlib.sha256(raw.encode()).hexdigest()[:32]` (code version). See ADR-017.
+
+### Impact
+None — correct implementation was used.
+
+### Resolution
+Confirmed CONFLICT-006 pre-resolution was applied correctly.
+
+---
+
+## [2026-03-16] [PHASE 8] [CRITIQUE] CONFLICT-009 mooted by ADR-016
+
+**Type:** CRITIQUE
+**Status:** RESOLVED
+**Affects:** CLAUDE.md CONFLICT-009 — TIER_ORDER contradiction between Phase 7 and Phase 8
+**Severity:** LOW
+
+### Finding
+CLAUDE.md CONFLICT-009 warned about Phase 7 vs Phase 8 TIER_ORDER ordering. ADR-016 (all features free, no tier gating) makes this conflict moot — TIER_ORDER still exists in decorators.py but `@require_tier` is never called on any route.
+
+### Impact
+None — tier gating is dormant.
+
+### Resolution
+CONFLICT-009 resolved as moot per ADR-016. No tier ordering changes needed.

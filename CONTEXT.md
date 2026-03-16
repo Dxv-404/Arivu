@@ -39,7 +39,29 @@ Phase 8 — Final Intelligence Layer, Trust Features, Live Mode & v1.0 (COMPLETE
 - Phase 8 migration adds 7 tables: researcher_profiles, graph_memory_state, live_subscriptions, live_alerts, confidence_overrides, cross_domain_spark_cache, literature_review_jobs
 - All 14 Phase 8 intelligence modules implemented (reconstructed — no v1 code existed)
 - CitationIntentClassifier: 3-tier strategy (linguistic markers -> mutation_type mapping -> LLM)
-- 4 persona framings wired into ChatGuide (explorer, strategist, builder, skeptic)
+- 4 persona framings wired into ChatGuide (explorer, critic, innovator, historian)
+
+## v1.0 Release Notes
+Arivu v1.0 released — all 8 phases complete. 253 tests passing, 0 failures. Features:
+- Full citation ancestry graph with 7 mutation types and cascading pruning animation
+- 14 Phase 8 intelligence modules (cross-domain sparks, error propagation, research risk, etc.)
+- Research DNA profiling, diversity scoring, orphan detection, gap finding
+- Science journalism layer, researcher profiles, literature review engine
+- Live Mode subscriptions with nightly cron monitoring
+- Public REST API (/v1/) with API key authentication
+- GDPR-compliant data export and account deletion
+- 4 persona modes (explorer, critic, innovator, historian) for ChatGuide
+- Trust layer: confidence badges, disagreement flags, graph memory
+- 7 gallery precomputed papers, 4 visualization modes (constellation, geological, river, time-machine)
+
+## Post-v1 Roadmap
+Not planned for any phase:
+- Prediction Market
+- Mental Model Mapper
+- Community-wide Collaborative Annotation
+- Lab Genealogy System
+- Conference Intelligence Layer (F11.10)
+- 3D WebGL visualization upgrades
 
 ## Last Session Summary
 Phase 8 implementation completed in full:
@@ -72,6 +94,16 @@ Phase 8 implementation completed in full:
 **§17:** Security audit passed — parameterized SQL, CSP header present, no f-string SQL injection
 
 **Tests:** 253 total (34 Phase 8), 0 failures across all phases
+
+## Post-v1.0 Audit Summary
+Post-implementation audit identified and fixed 7 issues:
+- FIX 1: chat_guide.py persona names corrected (strategist/builder/skeptic → critic/innovator/historian)
+- FIX 2: researcher_profiles.py hashlib import moved to module level (was inside for-loop)
+- FIX 3: scripts/live_monitor_cron.py created (missing from Phase 8 implementation)
+- FIX 4: public_api.py extended with 3 Phase 8 endpoints (researchers, literature-review, journalism)
+- FIX 5: CONTEXT.md updated with v1.0 Release Notes, Post-v1 Roadmap, corrected persona names
+- FIX 6: CRITIQUE_LOG.md extended with Phase 8 entries
+- 13 of 20 audit checks passed on first run; all 7 failures resolved
 
 ## Known Issues / Blockers
 - Gallery previews not yet generated — run precompute_gallery.py once S2 key arrives
