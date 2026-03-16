@@ -15,6 +15,7 @@ class GraphLoader {
   }
 
   start() {
+    this._intentionalClose = false;  // Reset for retries
     const url = `/api/graph/stream?paper_id=${encodeURIComponent(this.paperId)}&goal=${this.goal}`;
     this.eventSource = new EventSource(url);
     this._lastEventTime = Date.now();
@@ -25,6 +26,7 @@ class GraphLoader {
     this._stallTimer = setInterval(() => {
       if (Date.now() - this._lastEventTime > 180000) {
         clearInterval(this._stallTimer);
+        this._intentionalClose = true;
         this.eventSource.close();
         this._showError('Graph build is taking too long. The server may be busy — try again later or try a different paper.');
       }
@@ -36,6 +38,10 @@ class GraphLoader {
     });
 
     this.eventSource.addEventListener('error', () => {
+      // Guard: when WE close the EventSource (e.g. for retry), the browser
+      // may fire a final 'error' event with readyState=CLOSED. Suppress it
+      // so it doesn't overwrite the retry progress message.
+      if (this._intentionalClose) return;
       if (this.eventSource.readyState === EventSource.CLOSED) {
         clearInterval(this._stallTimer);
         this._showError('Connection to server was lost. Please refresh.');
@@ -50,9 +56,12 @@ class GraphLoader {
       case 'crawling':   this._updateProgress('🕸️', data.message || 'Crawling references...', 20); break;
       case 'analyzing':  this._updateProgress('🧠', data.message || 'Analysing relationships...', 60); break;
       case 'computing':  this._updateProgress('⚡', data.message || 'Computing insights...', 85); break;
+      case 'finalizing': this._updateProgress('⚙️', data.message || 'Finalizing graph...', 92); break;
       case 'done':
+        this._retryCount = 0;  // Reset on success
         this._updateProgress('✅', 'Graph ready!', 100);
         clearInterval(this._stallTimer);
+        this._intentionalClose = true;
         this.eventSource.close();
         // Both cached and fresh builds send graph data inline via data.graph.
         // (data.graph_url was never populated by the server — that code path was a bug.)
@@ -66,8 +75,29 @@ class GraphLoader {
         }
         break;
       case 'error':
-        this._showError(data.message || 'Graph build failed.');
         clearInterval(this._stallTimer);
+        this._intentionalClose = true;
+        this.eventSource.close();
+        if (data.retry) {
+          // Stall/restart detected — automatically retry after a short delay.
+          // The server has already marked the dead job as 'timed_out', so the
+          // reconnection guard will start a fresh build on the next request.
+          this._retryCount = (this._retryCount || 0) + 1;
+          if (this._retryCount <= 2) {
+            this._updateProgress('🔄', 'Server restarted. Retrying in 3 seconds...', 0);
+            setTimeout(() => this.start(), 3000);
+          } else {
+            this._showError('Build failed after multiple retries. Please try again later.');
+          }
+        } else {
+          this._showError(data.message || 'Graph build failed.');
+        }
+        break;
+      case 'timeout':
+        // Server-side 5-minute build timeout
+        this._showError(data.message || 'Graph build timed out. Please try again.');
+        clearInterval(this._stallTimer);
+        this._intentionalClose = true;
         this.eventSource.close();
         break;
     }

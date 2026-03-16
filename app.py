@@ -248,6 +248,49 @@ def create_app():
 
     register_error_handlers(app)
 
+    # ── Ensure partial unique index for build dedup ──────────────────────
+    # Prevents duplicate pending builds for the same paper.  Safe to run
+    # repeatedly because of IF NOT EXISTS.
+    try:
+        db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS build_jobs_paper_pending_uniq
+            ON build_jobs (paper_id)
+            WHERE status = 'pending'
+            """,
+            (),
+        )
+    except Exception as e:
+        app.logger.warning(f"Build dedup index creation failed (non-fatal): {e}")
+
+    # ── Zombie build job cleanup ─────────────────────────────────────────
+    # On serverless platforms (Koyeb free tier), instance recycling kills
+    # background build threads but leaves build_jobs rows as 'pending'
+    # forever in the DB.  New requests for the same paper then latch onto
+    # the dead job via the reconnection guard and poll job_events forever.
+    # Fix: on startup, mark all stale pending jobs as 'timed_out'.
+    #
+    # Threshold is 6 minutes (not 5) to avoid killing live builds from
+    # the OLD instance during a rolling deploy — the SSE deadline is
+    # 5 minutes, so any build that is 6+ minutes old has either finished
+    # or been timed out by the SSE handler already.
+    try:
+        cleaned = db.execute(
+            """
+            UPDATE build_jobs
+            SET status = 'timed_out'
+            WHERE status = 'pending'
+              AND created_at < NOW() - INTERVAL '6 minutes'
+            """,
+            (),
+        )
+        if cleaned:
+            app.logger.info(
+                f"Cleaned up {cleaned} zombie pending build jobs on startup"
+            )
+    except Exception as e:
+        app.logger.warning(f"Zombie job cleanup failed (non-fatal): {e}")
+
     # Phase 6: Register auth blueprint
     app.register_blueprint(auth_bp)
 
@@ -497,36 +540,122 @@ def create_app():
         # reuse the existing build thread instead of spawning a duplicate.
         # SESSION-INDEPENDENT: match by paper_id across ALL sessions — a build
         # started by session A can be reused by session B for the same paper.
+        #
+        # LIVENESS CHECK: A pending job is only "alive" if it has produced a
+        # job_event within the last 90 seconds.  On Koyeb free tier, instance
+        # recycling kills daemon build threads silently — without a liveness
+        # check, new requests latch onto the dead job and poll forever.
+        #
+        # DOI-AWARE: build_jobs.paper_id may store either a raw DOI or an
+        # S2 paper ID (depending on what the user submitted).  We check both
+        # the raw paper_id AND any DOI → S2 mapping from the papers table
+        # to avoid duplicate builds for the same paper with different IDs.
+        #
+        # 90s window: matches NLP_WORKER_TIMEOUT (cold start max = 90s).
+        # A job that just woke the NLP worker is still considered live.
         existing_job = db.fetchone(
             """
-            SELECT job_id FROM build_jobs
-            WHERE paper_id = %s AND status = 'pending'
-              AND created_at > NOW() - INTERVAL '10 minutes'
-            ORDER BY created_at DESC
+            SELECT bj.job_id
+            FROM build_jobs bj
+            WHERE (bj.paper_id = %s OR bj.paper_id IN (
+                      SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
+                  ))
+              AND bj.status = 'pending'
+              AND bj.created_at > NOW() - INTERVAL '10 minutes'
+              AND EXISTS (
+                  SELECT 1 FROM job_events je
+                  WHERE je.job_id = bj.job_id
+                    AND je.created_at > NOW() - INTERVAL '90 seconds'
+              )
+            ORDER BY bj.created_at DESC
             LIMIT 1
             """,
-            (paper_id[:200],),
+            (paper_id[:200], paper_id[:200]),
         )
 
+        # Also check for very fresh jobs (< 30s old) that haven't emitted
+        # events yet — the build thread may still be starting up.
+        if not existing_job:
+            existing_job = db.fetchone(
+                """
+                SELECT job_id FROM build_jobs
+                WHERE (paper_id = %s OR paper_id IN (
+                          SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
+                      ))
+                  AND status = 'pending'
+                  AND created_at > NOW() - INTERVAL '30 seconds'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (paper_id[:200], paper_id[:200]),
+            )
+
         if existing_job:
-            # Existing build is running — just poll its events (no rate limit consumed)
+            # Existing build is alive — just poll its events (no rate limit consumed)
             job_id = existing_job["job_id"]
-            logger.info(f"SSE reconnect: reusing build job {job_id} for {paper_id[:20]}…")
+            logger.info(f"SSE reconnect: reusing LIVE build job {job_id} for {paper_id[:20]}…")
         else:
             # Fresh build required — apply rate limit NOW (not for cache hits or reconnects)
             allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
             if not allowed:
                 return jsonify(rate_limiter.get_429_body(headers)), 429, headers
 
-            # No existing build — create new job and start background thread
+            # No existing build — create new job and start background thread.
+            # Dedup: use INSERT...SELECT WHERE NOT EXISTS to avoid duplicates
+            # when two requests arrive within milliseconds.  This runs as a
+            # single SQL statement (atomic within its transaction).
             job_id = str(uuid.uuid4())
-            db.execute(
-                """
-                INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
-                VALUES (%s, %s, %s, 'pending', NOW())
-                """,
-                (job_id, paper_id[:200], session_id),
-            )
+            _start_thread = True  # Only start a build thread if WE created the job
+
+            try:
+                created = db.execute(
+                    """
+                    INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
+                    SELECT %s, %s, %s, 'pending', NOW()
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM build_jobs
+                        WHERE (paper_id = %s OR paper_id IN (
+                                  SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
+                              ))
+                          AND status = 'pending'
+                          AND created_at > NOW() - INTERVAL '30 seconds'
+                    )
+                    """,
+                    (job_id, paper_id[:200], session_id, paper_id[:200], paper_id[:200]),
+                )
+            except Exception as e:
+                logger.warning(f"build_jobs INSERT failed (treating as dedup): {e}")
+                created = 0  # Treat DB error as if another request won the race
+
+            if created != 1:
+                # Another request already created a job — find and reuse it
+                _start_thread = False
+                recheck = db.fetchone(
+                    """
+                    SELECT job_id FROM build_jobs
+                    WHERE (paper_id = %s OR paper_id IN (
+                              SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
+                          ))
+                      AND status = 'pending'
+                      AND created_at > NOW() - INTERVAL '30 seconds'
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (paper_id[:200], paper_id[:200]),
+                )
+                if recheck:
+                    job_id = recheck["job_id"]
+                    logger.info(f"SSE dedup: reusing existing job {job_id}")
+                else:
+                    # Edge case: the other job finished/errored between our
+                    # INSERT check and this SELECT.  Create our own.
+                    _start_thread = True
+                    db.execute(
+                        """
+                        INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
+                        VALUES (%s, %s, %s, 'pending', NOW())
+                        """,
+                        (job_id, paper_id[:200], session_id),
+                    )
 
             # Extract user info BEFORE spawning background thread
             # (Flask request context is unavailable in background threads)
@@ -571,10 +700,11 @@ def create_app():
                         (job_id,),
                     )
 
-            thread = Thread(target=_background_build, daemon=True)
-            thread.start()
-
-            log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
+            # Only start a build thread if WE created the job (not reused from lock race)
+            if _start_thread:
+                thread = Thread(target=_background_build, daemon=True)
+                thread.start()
+                log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
 
         # Stream events from job_events as background thread writes them
         last_id_header = request.headers.get("Last-Event-ID", "0")
@@ -585,9 +715,22 @@ def create_app():
 
             Flask's stream_with_context() raises GeneratorExit when the client
             disconnects; we catch it to log and exit cleanly.
+
+            STALL DETECTION: If no new events appear for 4 minutes while
+            the build_job is still 'pending', the background thread is dead
+            (Koyeb instance recycled).  We mark it timed_out and tell the
+            client to retry.
+
+            Why 4 minutes (not 2): Stage 2 NLP analysis can process 200+
+            edges in batches of 5 through Groq's API without emitting any
+            intermediate events.  40 Groq calls × 3s each = ~120s.  The NLP
+            worker cold start adds up to 90s.  So 240s is the safe stall
+            limit that avoids false positives on legitimately slow builds.
             """
             sequence = int(last_id_header) if last_id_header.isdigit() else 0
-            deadline = time.time() + 300   # 5-minute timeout
+            deadline = time.time() + 300   # 5-minute overall timeout
+            last_event_time = time.time()   # Track when we last got a real event
+            stall_limit = 240               # 4 minutes without events = dead thread
 
             try:
                 while time.time() < deadline:
@@ -604,6 +747,7 @@ def create_app():
 
                     for ev in events:
                         sequence = ev["id"]
+                        last_event_time = time.time()  # Reset stall timer
                         data = ev["event_data"]
                         # Guard: psycopg2 may return JSONB as string or dict
                         if isinstance(data, str):
@@ -616,6 +760,30 @@ def create_app():
                             return
 
                     if not events:
+                        # ── Stall detection ──────────────────────────────────
+                        # If 4+ minutes without any new events, check if the
+                        # build job is still pending.  If so, the background
+                        # thread is dead — mark it and tell client to retry.
+                        if time.time() - last_event_time > stall_limit:
+                            job_status = db.fetchone(
+                                "SELECT status FROM build_jobs WHERE job_id = %s",
+                                (job_id,),
+                            )
+                            if job_status and job_status["status"] == "pending":
+                                logger.warning(
+                                    f"Build job {job_id} stalled — no events for "
+                                    f"{stall_limit}s.  Marking as timed_out."
+                                )
+                                try:
+                                    db.execute(
+                                        "UPDATE build_jobs SET status = 'timed_out' WHERE job_id = %s",
+                                        (job_id,),
+                                    )
+                                except Exception:
+                                    pass  # Best-effort — still tell client to retry
+                                yield f"data: {json.dumps({'status': 'error', 'message': 'Build thread died (server restarted). Please try again.', 'retry': True})}\n\n"
+                                return
+
                         # Send keepalive every 2s to prevent Koyeb/proxy timeout.
                         # Must be a real data: frame (not a comment) so the client
                         # EventSource.onmessage fires and resets the stall timer.
@@ -624,6 +792,15 @@ def create_app():
                     else:
                         time.sleep(0.3)
 
+                # Overall 5-minute timeout hit — mark the job so it's not reused
+                logger.warning(f"Build job {job_id} hit 5-minute SSE timeout — marking timed_out")
+                try:
+                    db.execute(
+                        "UPDATE build_jobs SET status = 'timed_out' WHERE job_id = %s AND status = 'pending'",
+                        (job_id,),
+                    )
+                except Exception:
+                    pass
                 yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 5 minutes'})}\n\n"
 
             except GeneratorExit:

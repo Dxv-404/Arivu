@@ -269,13 +269,31 @@ class SmartPaperResolver:
         all_papers = []
 
         for chunk in chunks:
-            # Check DB cache for each ID
+            # Batch DB cache lookup — single query instead of N individual ones.
+            # For depth-2 expansion with 50 papers × 50 refs each, this reduces
+            # 2,500 DB round trips down to ~5 (one per chunk of 500).
             cached_ids = set()
-            for pid in chunk:
-                cached = self._load_from_cache(pid)
-                if cached:
-                    all_papers.append(cached)
-                    cached_ids.add(pid)
+            try:
+                rows = db.fetchall(
+                    """
+                    SELECT * FROM papers
+                    WHERE paper_id = ANY(%s)
+                      AND created_at > NOW() - INTERVAL '30 days'
+                    """,
+                    (chunk,),
+                )
+                for row in rows:
+                    paper = Paper.from_db_row(row)
+                    all_papers.append(paper)
+                    cached_ids.add(paper.paper_id)
+            except Exception as e:
+                logger.debug(f"Batch cache load failed: {e}")
+                # Fallback to individual lookups
+                for pid in chunk:
+                    cached = self._load_from_cache(pid)
+                    if cached:
+                        all_papers.append(cached)
+                        cached_ids.add(pid)
 
             missing = [p for p in chunk if p not in cached_ids]
             if not missing:

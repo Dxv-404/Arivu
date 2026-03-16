@@ -271,45 +271,83 @@ class AncestryGraph:
         self.graph.add_node(seed_paper.paper_id, depth=0)
 
         visited: set[str] = {seed_paper.paper_id}
-        queue: deque[tuple[Paper, int]] = deque([(seed_paper, 0)])
 
-        while queue:
-            paper, depth = queue.popleft()
+        # ── BFS by depth level — depth 2+ uses concurrent expansion ─────
+        # At depth 0, there is 1 paper (seed) — sequential is fine.
+        # At depth 1+, there can be 30-50 papers — processing them serially
+        # takes 4-25 minutes (each paper requires 5-7 sequential API calls).
+        # Using asyncio.gather() with a semaphore processes them concurrently,
+        # cutting depth-2 time from minutes to tens of seconds.
+        current_level: list[tuple[Paper, int]] = [(seed_paper, 0)]
+        _concurrency_sem = asyncio.Semaphore(5)  # Max 5 concurrent API call chains
+        _cap_reached = False
 
-            if depth >= max_depth:
-                continue
+        while current_level and not _cap_reached:
+            next_level: list[tuple[Paper, int]] = []
 
-            await self._emit(
-                "crawling",
-                f"Depth {depth+1}: expanding '{paper.title[:50]}…'"
-            )
+            async def _expand_one(paper: Paper, depth: int):
+                """Expand a single paper's references. Thread-safe via semaphore."""
+                nonlocal _cap_reached
+                if _cap_reached or depth >= max_depth:
+                    return []
+                async with _concurrency_sem:
+                    # Live graph size check — stops fetching if cap already exceeded
+                    # (checked under semaphore to catch growth from concurrent tasks)
+                    if _cap_reached or len(self.graph.nodes) > config.MAX_GRAPH_SIZE:
+                        _cap_reached = True
+                        return []
+                    await self._emit(
+                        "crawling",
+                        f"Depth {depth+1}: expanding '{paper.title[:50]}…'"
+                    )
+                    fetch_limit = min(config.MAX_REFS_PER_PAPER * 2, 100)
+                    refs = await self._resolver.get_references(paper.paper_id, limit=fetch_limit)
+                    selected = select_references(seed_paper, refs, limit=config.MAX_REFS_PER_PAPER)
+                    if not selected:
+                        return []
+                    ref_ids = [r.paper_id for r in selected]
+                    enriched = await self._resolver.resolve_batch(ref_ids)
+                    return [(paper, ref, depth) for ref in enriched]
 
-            # Fetch 2x the config cap to allow select_references() to rank,
-            # but avoid requesting 100 when we only need 15 (saves S2 API time).
-            fetch_limit = min(config.MAX_REFS_PER_PAPER * 2, 100)
-            refs = await self._resolver.get_references(paper.paper_id, limit=fetch_limit)
-            selected = select_references(seed_paper, refs, limit=config.MAX_REFS_PER_PAPER)
+            # Depth 0 (seed): sequential for simplicity
+            # Depth 1+: concurrent expansion of all papers at this depth
+            if len(current_level) <= 3:
+                # Small batches: run sequentially (less overhead)
+                results = []
+                for _paper, _depth in current_level:
+                    r = await _expand_one(_paper, _depth)
+                    results.append(r)
+            else:
+                # Large batches (depth 2+): run concurrently
+                await self._emit(
+                    "crawling",
+                    f"Depth {current_level[0][1]+1}: expanding {len(current_level)} papers concurrently…"
+                )
+                tasks = [_expand_one(p, d) for p, d in current_level]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            if not selected:
-                continue
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning(f"Concurrent BFS expansion error: {result}")
+                    continue
+                for parent_paper, ref, ref_depth in result:
+                    all_papers[ref.paper_id] = ref
+                    if ref.paper_id not in visited:
+                        visited.add(ref.paper_id)
+                        self.graph.add_node(ref.paper_id, depth=ref_depth + 1)
+                        next_level.append((ref, ref_depth + 1))
+                    if not self.graph.has_edge(parent_paper.paper_id, ref.paper_id):
+                        self.graph.add_edge(parent_paper.paper_id, ref.paper_id)
 
-            ref_ids = [r.paper_id for r in selected]
-            enriched = await self._resolver.resolve_batch(ref_ids)
+                    # Safety cap
+                    if len(self.graph.nodes) > config.MAX_GRAPH_SIZE:
+                        logger.warning(f"Graph size cap reached ({config.MAX_GRAPH_SIZE} nodes)")
+                        _cap_reached = True
+                        break
+                if _cap_reached:
+                    break
 
-            for ref in enriched:
-                all_papers[ref.paper_id] = ref
-                if ref.paper_id not in visited:
-                    visited.add(ref.paper_id)
-                    self.graph.add_node(ref.paper_id, depth=depth + 1)
-                    queue.append((ref, depth + 1))
-                # Edge: paper cites ref
-                if not self.graph.has_edge(paper.paper_id, ref.paper_id):
-                    self.graph.add_edge(paper.paper_id, ref.paper_id)
-
-            # Safety cap
-            if len(self.graph.nodes) > config.MAX_GRAPH_SIZE:
-                logger.warning(f"Graph size cap reached ({config.MAX_GRAPH_SIZE} nodes)")
-                break
+            current_level = next_level
 
         if len(self.graph.nodes) < 2:
             raise EmptyGraphError(seed_paper.paper_id)
