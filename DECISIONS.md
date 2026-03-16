@@ -29,6 +29,7 @@ If you are about to decide something not recorded here, add it first.
 | 19 | gallery_index.json path | data/gallery_index.json (root of data/) | Moved from data/precomputed/ in Phase 4 per CLAUDE.md Part 6.4 |
 
 | 20 | Dockerfile Debian Trixie | libgdk-pixbuf-xlib-2.0-0 (NOT libgdk-pixbuf2.0-0) | Package renamed in Debian Trixie; old name causes Koyeb build failure |
+| 21 | Billing model | All features free; billing.py dormant | ADR-016 — all features accessible to authenticated users; Stripe code retained for portfolio |
 
 ## ADR-014: Production database
 **Date:** 2026-03-15

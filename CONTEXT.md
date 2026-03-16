@@ -89,8 +89,6 @@ Phase 6 implementation complete. Full auth, billing, GDPR, and intelligence modu
 - Custom domain (arivu.app) DNS not yet configured
 - ground_truth_eval.py needs ≥20 pairs before running eval (currently has 5 seed pairs)
 - WeasyPrint requires libcairo2 on the system — verify Dockerfile includes it
-- Phase 6 migration not yet run against Neon (run scripts/migrate_phase6.py before deploying)
-- One-time Neon SQL needed: `UPDATE users SET tier = 'researcher' WHERE tier = 'free';` (existing users)
 - ENABLE_AUTH should be set to true in Koyeb only after end-to-end testing
 
 ## Environment
