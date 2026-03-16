@@ -79,17 +79,20 @@ def select_references(
 
 def determine_crawl_depth(seed_paper: Paper, user_goal: str) -> int:
     """
-    Adaptive depth: 2 for recent papers, 3 for older papers, capped at 3.
-    Spec §7: always cap total nodes at 400.
+    Adaptive depth: 2 for recent papers, 3 for older papers.
+    Always capped by config.MAX_GRAPH_DEPTH (1 without S2 key, 2 default).
     """
     base = 2
     if seed_paper.year and seed_paper.year < 2000:
         base = 3
     if user_goal == "quick_overview":
-        return min(base, 2)
-    if user_goal == "deep_ancestry":
-        return min(base + 1, 3)
-    return base
+        depth = min(base, 2)
+    elif user_goal == "deep_ancestry":
+        depth = min(base + 1, 3)
+    else:
+        depth = base
+    # Hard cap from config — respects S2 rate-limit fallback
+    return min(depth, config.MAX_GRAPH_DEPTH)
 
 
 class AncestryGraph:
@@ -267,7 +270,10 @@ class AncestryGraph:
                 f"Depth {depth+1}: expanding '{paper.title[:50]}…'"
             )
 
-            refs = await self._resolver.get_references(paper.paper_id, limit=100)
+            # Fetch 2x the config cap to allow select_references() to rank,
+            # but avoid requesting 100 when we only need 15 (saves S2 API time).
+            fetch_limit = min(config.MAX_REFS_PER_PAPER * 2, 100)
+            refs = await self._resolver.get_references(paper.paper_id, limit=fetch_limit)
             selected = select_references(seed_paper, refs, limit=config.MAX_REFS_PER_PAPER)
 
             if not selected:

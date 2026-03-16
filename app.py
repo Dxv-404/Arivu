@@ -410,16 +410,6 @@ def create_app():
             (session_id, paper_id, paper_id),
         )
 
-        job_id = str(uuid.uuid4())
-
-        db.execute(
-            """
-            INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
-            VALUES (%s, %s, %s, 'pending', NOW())
-            """,
-            (job_id, paper_id[:200], session_id),
-        )
-
         # If cached, stream it immediately and finish
         if cached_graph:
             from backend.r2_client import R2Client
@@ -442,50 +432,75 @@ def create_app():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
 
-        # Free-tier graph counter removed — all features free (ADR-016).
+        # ── Reconnection guard: reuse existing in-progress build ──────────
+        # When EventSource reconnects (Koyeb timeout, network blip), reuse
+        # the existing build thread instead of spawning a duplicate.
+        existing_job = db.fetchone(
+            """
+            SELECT job_id FROM build_jobs
+            WHERE paper_id = %s AND session_id = %s AND status = 'pending'
+              AND created_at > NOW() - INTERVAL '10 minutes'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (paper_id[:200], session_id),
+        )
 
-        # Start background build thread
-        def _background_build():
-            engine = AncestryGraph()
-            try:
-                await_sync(engine.build_graph(paper_id, user_goal, job_id))
-                db.execute(
-                    "UPDATE build_jobs SET status = 'done' WHERE job_id = %s",
-                    (job_id,),
-                )
-                # Link graph to authenticated user (enables persistent history)
-                if Config.ENABLE_AUTH:
-                    _link_user = get_current_user()
-                    if _link_user:
-                        # Find the graph_id created by this build
-                        _built_graph = db.fetchone(
-                            "SELECT graph_id FROM graphs WHERE seed_paper_id = %s "
-                            "ORDER BY created_at DESC LIMIT 1",
-                            (paper_id,),
-                        )
-                        if _built_graph:
-                            db.execute(
-                                "UPDATE graphs SET user_id = %s::uuid WHERE graph_id = %s",
-                                (str(_link_user["user_id"]), _built_graph["graph_id"]),
+        if existing_job:
+            # Existing build is running — just poll its events
+            job_id = existing_job["job_id"]
+            logger.info(f"SSE reconnect: reusing build job {job_id} for {paper_id[:20]}…")
+        else:
+            # No existing build — create new job and start background thread
+            job_id = str(uuid.uuid4())
+            db.execute(
+                """
+                INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
+                VALUES (%s, %s, %s, 'pending', NOW())
+                """,
+                (job_id, paper_id[:200], session_id),
+            )
+
+            def _background_build():
+                engine = AncestryGraph()
+                try:
+                    await_sync(engine.build_graph(paper_id, user_goal, job_id))
+                    db.execute(
+                        "UPDATE build_jobs SET status = 'done' WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    # Link graph to authenticated user (enables persistent history)
+                    if Config.ENABLE_AUTH:
+                        _link_user = get_current_user()
+                        if _link_user:
+                            _built_graph = db.fetchone(
+                                "SELECT graph_id FROM graphs WHERE seed_paper_id = %s "
+                                "ORDER BY created_at DESC LIMIT 1",
+                                (paper_id,),
                             )
-            except Exception as e:
-                app.logger.error(f"Background build failed for job {job_id}: {e}", exc_info=True)
-                db.execute(
-                    """
-                    INSERT INTO job_events (job_id, sequence, event_data, created_at)
-                    VALUES (%s, 1, %s::jsonb, NOW())
-                    """,
-                    (job_id, json.dumps({"status": "error", "message": str(e)[:500]})),
-                )
-                db.execute(
-                    "UPDATE build_jobs SET status = 'error' WHERE job_id = %s",
-                    (job_id,),
-                )
+                            if _built_graph:
+                                db.execute(
+                                    "UPDATE graphs SET user_id = %s::uuid WHERE graph_id = %s",
+                                    (str(_link_user["user_id"]), _built_graph["graph_id"]),
+                                )
+                except Exception as e:
+                    app.logger.error(f"Background build failed for job {job_id}: {e}", exc_info=True)
+                    db.execute(
+                        """
+                        INSERT INTO job_events (job_id, sequence, event_data, created_at)
+                        VALUES (%s, 1, %s::jsonb, NOW())
+                        """,
+                        (job_id, json.dumps({"status": "error", "message": str(e)[:500]})),
+                    )
+                    db.execute(
+                        "UPDATE build_jobs SET status = 'error' WHERE job_id = %s",
+                        (job_id,),
+                    )
 
-        thread = Thread(target=_background_build, daemon=True)
-        thread.start()
+            thread = Thread(target=_background_build, daemon=True)
+            thread.start()
 
-        log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
+            log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
 
         # Stream events from job_events as background thread writes them
         last_id_header = request.headers.get("Last-Event-ID", "0")
@@ -521,10 +536,11 @@ def create_app():
                             return
 
                     if not events:
+                        # Send keepalive every 2s to prevent Koyeb/proxy timeout
                         yield ": keepalive\n\n"
-                        time.sleep(1)
+                        time.sleep(2)
                     else:
-                        time.sleep(0.1)
+                        time.sleep(0.3)
 
                 yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 5 minutes'})}\n\n"
 
