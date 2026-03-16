@@ -239,12 +239,12 @@ class SmartPaperResolver:
             if resp.status_code == 429:
                 await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
                 logger.info(f"S2 references 429 for {s2_paper_id[:12]}…, falling back to OpenAlex")
-                return await self._get_openalex_references(s2_paper_id)
+                return await self._get_openalex_references(s2_paper_id, limit=limit)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:
             logger.warning(f"S2 references fetch failed for {s2_paper_id}: {e}")
-            return await self._get_openalex_references(s2_paper_id)
+            return await self._get_openalex_references(s2_paper_id, limit=limit)
 
         refs: list[Paper] = []
         if not data:
@@ -536,11 +536,12 @@ class SmartPaperResolver:
         logger.info(f"OpenAlex search returned {len(results)} results for '{query}'")
         return results
 
-    async def _get_openalex_references(self, paper_id: str) -> list[Paper]:
+    async def _get_openalex_references(self, paper_id: str, limit: int = 100) -> list[Paper]:
         """
         Fallback: get references via OpenAlex when S2 is rate-limited.
         Looks up the paper's DOI in our DB, queries OpenAlex for its
         referenced_works, then batch-resolves DOIs to S2 IDs.
+        Returns at most `limit` references (respects MAX_REFS_PER_PAPER).
         """
         doi = self._lookup_paper_doi(paper_id)
         if not doi:
@@ -569,8 +570,9 @@ class SmartPaperResolver:
             return []
 
         # Extract OpenAlex IDs ("https://openalex.org/W123" → "W123")
+        # Cap at `limit` to respect MAX_REFS_PER_PAPER from graph engine
         ref_oa_ids = []
-        for url in ref_urls[:100]:
+        for url in ref_urls[:limit]:
             oa_id = url.rsplit("/", 1)[-1] if "/" in url else url
             if oa_id.startswith("W"):
                 ref_oa_ids.append(oa_id)
@@ -586,7 +588,7 @@ class SmartPaperResolver:
                 "https://api.openalex.org/works",
                 params=self._oa_params({
                     "filter": f"openalex:{id_filter}",
-                    "per_page": 100,
+                    "per_page": min(limit, 100),
                     "select": _OA_FIELDS,
                 }),
                 headers=self._oa_headers(),
