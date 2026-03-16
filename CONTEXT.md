@@ -42,26 +42,33 @@ Phase 8 — Final Intelligence Layer, Trust Features, Live Mode & v1.0 (COMPLETE
 - 4 persona framings wired into ChatGuide (explorer, critic, innovator, historian)
 
 ## v1.0 Release Notes
-Arivu v1.0 released — all 8 phases complete. 253 tests passing, 0 failures. Features:
-- Full citation ancestry graph with 7 mutation types and cascading pruning animation
-- 14 Phase 8 intelligence modules (cross-domain sparks, error propagation, research risk, etc.)
-- Research DNA profiling, diversity scoring, orphan detection, gap finding
-- Science journalism layer, researcher profiles, literature review engine
-- Live Mode subscriptions with nightly cron monitoring
-- Public REST API (/v1/) with API key authentication
-- GDPR-compliant data export and account deletion
-- 4 persona modes (explorer, critic, innovator, historian) for ChatGuide
-- Trust layer: confidence badges, disagreement flags, graph memory
-- 7 gallery precomputed papers, 4 visualization modes (constellation, geological, river, time-machine)
+- Tagged: v1.0
+- Feature count: ~62 features built across phases 1–8
+- Deferred to post-v1: F2.4 Prediction Market, F3.2 Collaboration
+  Finder, F3.3 Mental Model Mapper, F3.4 Lab Genealogy, F8.2
+  Collaborative Annotation, F8.4 Collaboration Finder Community,
+  F11.8 Policy Brief Generator, F11.10 Conference Intelligence Layer
+- Gallery: 7 precomputed papers (requires S2_API_KEY — pending approval)
+- Live Mode: polling-based (WebSocket is Phase 9+)
+- Researcher Profiles: single-graph version only. Name-hash surrogate
+  IDs stored — /researcher/<author_id> returns not_found for real S2
+  author IDs until proper ID resolution is built (post-v1)
+- Scheduled crons: nightly_maintenance 0 2 * * *, live_monitor
+  0 3 * * *, load_retraction_watch 0 4 * * 0, weekly_digest 0 8 * * 1
+- Known v1 limitation: live mode checks only first 10 nodes per
+  subscription (S2 API rate limit)
+- ADR-016: All features free for authenticated users; billing.py dormant
 
 ## Post-v1 Roadmap
-Not planned for any phase:
-- Prediction Market
-- Mental Model Mapper
-- Community-wide Collaborative Annotation
-- Lab Genealogy System
-- Conference Intelligence Layer (F11.10)
-- 3D WebGL visualization upgrades
+- F2.4  Prediction Market (community scale needed)
+- F3.2  Collaboration Finder (researcher profile index needed)
+- F3.3  Mental Model Mapper (multi-author aggregation)
+- F3.4  Lab Genealogy System (Math Genealogy Project API)
+- F8.2  Collaborative Annotation (moderation system)
+- F8.4  Collaboration Finder Community
+- F11.8 Science Policy Brief Generator
+- F11.10 Conference Intelligence Layer
+- Phase 9: WebSocket live mode, async job queue, full-graph live monitoring, mobile app, real S2 author ID resolution for profiles
 
 ## Last Session Summary
 Phase 8 implementation completed in full:
@@ -112,7 +119,9 @@ Post-implementation audit identified and fixed 7 issues:
 - Custom domain (arivu.app) DNS not yet configured
 - ground_truth_eval.py needs built graph in DB before running eval
 - ENABLE_AUTH should be set to true in Koyeb only after end-to-end testing
-
+- researcher_profiles: name-hash surrogate IDs mean /researcher/<id>
+  returns not_found for any real S2 author ID until proper S2 author
+  ID resolution is implemented (post-v1.0 work)
 ## Environment
 - DATABASE_URL: postgresql://arivu:localdev@localhost:5433/arivu?sslmode=disable (local)
 - NEON_DATABASE_URL: postgresql://neondb_owner:***@ep-young-haze-a1qrxgk6-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
