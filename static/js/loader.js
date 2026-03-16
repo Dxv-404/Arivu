@@ -75,6 +75,14 @@ class GraphLoader {
 
   _initGraph(graphData) {
     try {
+    // After graph resolution, update paperId to the canonical seed_paper_id
+    // (the S2 ID). The user may have entered a DOI, arXiv ID, or title —
+    // the graph engine resolves it to an S2 paper_id stored as seed_paper_id.
+    // All subsequent API calls (orphans, coverage, DNA, etc.) need this ID.
+    if (graphData.metadata && graphData.metadata.seed_paper_id) {
+      this.paperId = graphData.metadata.seed_paper_id;
+    }
+
     // Use classList (not .hidden attribute) — the CSS rule
     // #loading-overlay { display:flex } has higher specificity than
     // the UA [hidden] { display:none }, so .hidden = true won't work.

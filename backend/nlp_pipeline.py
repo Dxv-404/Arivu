@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 
 _GROQ_HEADERS = {"Content-Type": "application/json"}
 
+# Titles used by stub papers from resolve_batch() — skip NLP analysis for these
+_STUB_TITLES = frozenset({"(Metadata pending)", "Unknown", ""})
+
 
 class InheritanceDetector:
     """
@@ -195,6 +198,13 @@ class InheritanceDetector:
 
         if not citing or not cited:
             base["comparison_note"] = "Paper data missing"
+            return base
+
+        # Skip stub papers from resolve_batch() that have placeholder titles.
+        # NLP similarity against "(Metadata pending)" would produce garbage
+        # scores that get cached permanently in edge_analysis.
+        if citing.title in _STUB_TITLES or cited.title in _STUB_TITLES:
+            base["comparison_note"] = "Stub paper — skipping NLP analysis"
             return base
 
         citing_text = citing.abstract or citing.title or ""

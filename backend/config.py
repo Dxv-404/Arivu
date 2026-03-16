@@ -79,13 +79,17 @@ class Config:
     MAX_GRAPH_SIZE      = int(os.environ.get("MAX_GRAPH_SIZE", "600"))
     GRAPH_CACHE_TTL_DAYS = int(os.environ.get("GRAPH_CACHE_TTL_DAYS", "7"))
 
-    # ── Unauthenticated S2 fallback: reduce graph size to stay within
-    # 1 req/sec rate limit when no API key is configured.
-    # The rate limiter handles throttling; these caps keep builds
-    # under ~3 minutes without a key. Lifts once S2_API_KEY is set.
+    # ── 3-Tier API fallback (adaptive at build time) ──────────────
+    # Tier 1: S2_API_KEY set → full S2 access, no caps needed
+    # Tier 2: No S2 key → OpenAlex-primary, S2 unauthenticated as supplement
+    #         After first S2 429 → skip S2 entirely, OpenAlex-only
+    #         Refs/depth NOT capped — OpenAlex handles the load without rate issues
+    # Tier 3: No APIs working → degraded mode (detected at runtime)
+    #
+    # Previously capped at 30 refs without S2 key. Removed because OpenAlex
+    # is fast (no rate limit with email header) and can serve as primary source.
     if not os.environ.get("S2_API_KEY"):
-        MAX_REFS_PER_PAPER = min(MAX_REFS_PER_PAPER, 30)
-        MAX_GRAPH_DEPTH    = min(MAX_GRAPH_DEPTH, 2)
+        MAX_GRAPH_DEPTH = min(MAX_GRAPH_DEPTH, 2)  # Keep depth=2 cap (reasonable for all tiers)
 
     # ── Deployment ────────────────────────────────────────────────
     # Set AFTER first Koyeb deploy — used for CORS allow-list.

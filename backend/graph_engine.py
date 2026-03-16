@@ -230,8 +230,16 @@ class AncestryGraph:
         all_papers: dict[str, Paper] = {}
         build_start = time.time()
 
+        # ── Step 0: Detect API tier and reset per-build state ──────────
+        self._resolver.reset_for_new_build()
+        tier = self._resolver.detect_tier()
+        tier_labels = {1: "S2-primary (API key)", 2: "OpenAlex-primary", 3: "degraded"}
+        await self._emit(
+            "searching",
+            f"API tier: {tier_labels.get(tier, 'unknown')} — Finding seed paper…"
+        )
+
         # ── Step 1: Resolve seed paper ────────────────────────────────────
-        await self._emit("searching", "Finding seed paper…")
         from backend.normalizer import normalize_user_input
         canonical_id, id_type = normalize_user_input(seed_paper_id)
         seed_paper = await self._resolver.resolve(canonical_id, id_type)
@@ -250,10 +258,16 @@ class AncestryGraph:
         self._graph_id = self._compute_graph_id(seed_paper.paper_id, session_id)
 
         max_depth = determine_crawl_depth(seed_paper, user_goal)
-        logger.info(f"Building graph: seed={seed_paper.paper_id[:8]}… depth={max_depth}")
+        # Report effective tier after seed resolution (may have changed if S2 429'd during resolve)
+        effective_tier = self._resolver.detect_tier()
+        logger.info(
+            f"Building graph: seed={seed_paper.paper_id[:8]}… depth={max_depth} "
+            f"tier={effective_tier} refs_cap={config.MAX_REFS_PER_PAPER}"
+        )
 
         # ── Step 2: BFS crawl ─────────────────────────────────────────────
-        await self._emit("crawling", f"Building ancestry graph to depth {max_depth}…")
+        tier_msg = f" [Tier {effective_tier}]" if effective_tier > 1 else ""
+        await self._emit("crawling", f"Building ancestry graph to depth {max_depth}{tier_msg}…")
         self.graph.add_node(seed_paper.paper_id, depth=0)
 
         visited: set[str] = {seed_paper.paper_id}

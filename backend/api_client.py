@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from typing import Optional
 
@@ -51,11 +52,20 @@ logger = logging.getLogger(__name__)
 # Semantic Scholar rate limit:
 # No API key → 1 req/sec. With API key → 10 req/sec.
 # 1.1s delay gives a small buffer above the 1 req/sec limit.
+# In Tier 2 mode (OpenAlex-primary), S2 calls are optional enrichment
+# and use a shorter delay since we don't depend on them succeeding.
 async def _s2_delay() -> None:
-    """Sleep between S2 API calls when no API key is configured."""
-    from backend.config import Config
-    if not Config.S2_API_KEY:
-        await asyncio.sleep(1.1)
+    """Sleep between S2 API calls when no API key is configured.
+
+    In Tier 2 (no S2 key), we DON'T add extra delay beyond what the
+    CoordinatedRateLimiter enforces (1 req/s). The old 1.1s delay was
+    redundant with the limiter and wasted time. The limiter handles
+    actual rate enforcement; this function is now a no-op.
+    """
+    # The CoordinatedRateLimiter handles all rate limiting for S2.
+    # No additional sleep needed — the limiter's SlidingWindow(1, 1)
+    # already enforces 1 req/s without API key.
+    pass
 
 
 _DEDUP = PaperDeduplicator()
@@ -84,6 +94,12 @@ class SmartPaperResolver:
     """
     Fetches and merges paper metadata from multiple academic APIs.
 
+    3-Tier Architecture:
+        Tier 1: S2_API_KEY set → S2-primary, full speed (10 req/s)
+        Tier 2: No S2 key → OpenAlex-primary, S2 unauthenticated for enrichment
+                After first S2 429 → skip S2 entirely for rest of build
+        Tier 3: No APIs working → minimal graph (~30 nodes)
+
     Usage:
         resolver = SmartPaperResolver()
         paper = await resolver.resolve("1706.03762", "arxiv")
@@ -92,6 +108,53 @@ class SmartPaperResolver:
 
     def __init__(self):
         self._http: Optional[httpx.AsyncClient] = None
+        # Adaptive S2 availability tracking (3-tier system)
+        # Thread-safe: resolver is a module-level singleton shared across build threads
+        self._tier_lock = threading.Lock()
+        self._s2_skip_until: float = 0.0    # timestamp; skip S2 calls until this time
+        self._s2_consecutive_429s: int = 0   # track 429 frequency
+        self._build_tier: int = 0            # 0=not detected, 1/2/3=active tier
+
+    @property
+    def s2_is_usable(self) -> bool:
+        """Check if S2 API is currently usable (not in backoff). Thread-safe."""
+        if config.S2_API_KEY:
+            return True  # Tier 1: always usable with key
+        with self._tier_lock:
+            return time.time() >= self._s2_skip_until
+
+    def mark_s2_down(self, duration: int = 300) -> None:
+        """After S2 429, skip all S2 calls for `duration` seconds. Thread-safe."""
+        with self._tier_lock:
+            self._s2_skip_until = time.time() + duration
+            self._s2_consecutive_429s += 1
+            count = self._s2_consecutive_429s
+        logger.info(
+            f"S2 marked as down for {duration}s (429 #{count}) "
+            f"— switching to OpenAlex-primary mode"
+        )
+
+    def detect_tier(self) -> int:
+        """
+        Detect current operational tier at build start.
+        Called once per build — sets self._build_tier. Thread-safe.
+        """
+        with self._tier_lock:
+            if config.S2_API_KEY:
+                self._build_tier = 1
+            elif time.time() < self._s2_skip_until:
+                self._build_tier = 3  # S2 already known to be down
+            else:
+                self._build_tier = 2  # Will try S2, may downgrade to 3
+            tier = self._build_tier
+        logger.info(f"API tier detected: Tier {tier}")
+        return tier
+
+    def reset_for_new_build(self) -> None:
+        """Reset per-build state. Called at the start of each build. Thread-safe."""
+        with self._tier_lock:
+            self._s2_consecutive_429s = 0
+        # Don't reset _s2_skip_until — it's time-based and shared across builds
 
     async def _client(self) -> httpx.AsyncClient:
         """Lazy-initialize the shared HTTP client."""
@@ -140,6 +203,17 @@ class SmartPaperResolver:
                 paper = await self._resolve_without_s2(identifier, id_type)
                 if paper:
                     return paper
+            # Title search: _to_s2_id may have found results via OpenAlex but
+            # couldn't convert to S2 ID (S2 is down). Try direct OpenAlex search.
+            if id_type == ID_TYPE_TITLE:
+                results = await self._search_openalex(identifier, limit=1)
+                if results and results[0].doi:
+                    paper = await self._resolve_without_s2(results[0].doi, ID_TYPE_DOI)
+                    if paper:
+                        return paper
+                elif results:
+                    # No DOI but have paper data — return directly
+                    return results[0]
             raise PaperNotFoundError(identifier)
 
         # Check DB cache
@@ -180,8 +254,12 @@ class SmartPaperResolver:
 
     async def resolve_batch(self, paper_ids: list[str]) -> list[Paper]:
         """
-        Resolve multiple S2 corpus IDs in parallel (up to 500 per S2 batch call).
-        Returns successfully resolved papers (silently drops failed ones).
+        Resolve multiple paper IDs. Checks DB cache first, then S2 batch API.
+
+        In Tier 2/3 (S2 down): skips the S2 batch call entirely.
+        Papers from OpenAlex were already cached in _get_openalex_references(),
+        so DB cache hits handle most papers. Papers without cache entries
+        are returned with minimal metadata (just the ID from the graph).
         """
         if not paper_ids:
             return []
@@ -203,6 +281,33 @@ class SmartPaperResolver:
             if not missing:
                 continue
 
+            # Skip S2 batch if S2 is down (Tier 2 after 429, or Tier 3)
+            if not self.s2_is_usable:
+                logger.debug(
+                    f"S2 in backoff — skipping batch resolve for {len(missing)} papers "
+                    f"(already cached from OpenAlex: {len(cached_ids)})"
+                )
+                # Return stub papers for uncached IDs so BFS can continue
+                for pid in missing:
+                    # Try to find by DOI in our cache (OpenAlex papers stored with DOI)
+                    try:
+                        doi_row = db.fetchone(
+                            "SELECT * FROM papers WHERE doi IS NOT NULL AND paper_id = %s",
+                            (pid,),
+                        )
+                        if doi_row:
+                            all_papers.append(Paper.from_db_row(doi_row))
+                            continue
+                    except Exception:
+                        pass
+                    # Last resort: stub paper so BFS doesn't break
+                    all_papers.append(Paper(
+                        paper_id=pid,
+                        title="(Metadata pending)",
+                        text_tier=4,
+                    ))
+                continue
+
             # Batch fetch from S2
             fetched = await self._fetch_s2_batch(missing)
             for data in fetched:
@@ -221,7 +326,19 @@ class SmartPaperResolver:
         Return the referenced papers for a given S2 paper ID.
         Returns up to `limit` reference records (lightweight, title/year/ID only).
         Used by AncestryGraph.build_graph() for BFS expansion.
+
+        3-Tier routing:
+          Tier 1 (S2 key): S2-primary, OpenAlex supplement if sparse
+          Tier 2 (no key, S2 usable): Try S2 once, no retries. On 429→mark down→OpenAlex
+          Tier 2 (no key, S2 down): OpenAlex-primary, skip S2 entirely
+          Tier 3: OpenAlex only
         """
+        # If S2 is marked as down (post-429 backoff), go straight to OpenAlex
+        if not self.s2_is_usable:
+            logger.debug(f"S2 in backoff — using OpenAlex directly for {s2_paper_id[:12]}…")
+            return await self._get_openalex_references(s2_paper_id, limit=limit)
+
+        # Attempt S2 (Tier 1 or Tier 2 first-try)
         client = await self._client()
         url = f"https://api.semanticscholar.org/graph/v1/paper/{s2_paper_id}/references"
         params = {
@@ -232,18 +349,30 @@ class SmartPaperResolver:
         if config.S2_API_KEY:
             headers["x-api-key"] = config.S2_API_KEY
 
+        # Tier 2: use fast delay (0.3s) since S2 is optional enrichment
+        is_tier2 = not config.S2_API_KEY
         await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.get(url, params=params, headers=headers)
             if resp.status_code == 429:
                 await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
+                if is_tier2:
+                    # Tier 2: first 429 → mark S2 as down for 5 min, skip for rest of build
+                    self.mark_s2_down(duration=300)
                 logger.info(f"S2 references 429 for {s2_paper_id[:12]}…, falling back to OpenAlex")
                 return await self._get_openalex_references(s2_paper_id, limit=limit)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:
             logger.warning(f"S2 references fetch failed for {s2_paper_id}: {e}")
+            if is_tier2:
+                self.mark_s2_down(duration=180)  # HTTP error → skip S2 for 3 min
+            return await self._get_openalex_references(s2_paper_id, limit=limit)
+        except Exception as e:
+            logger.warning(f"S2 references request failed for {s2_paper_id}: {e}")
+            if is_tier2:
+                self.mark_s2_down(duration=180)
             return await self._get_openalex_references(s2_paper_id, limit=limit)
 
         refs: list[Paper] = []
@@ -273,7 +402,7 @@ class SmartPaperResolver:
                 f"S2 returned only {len(refs)} refs for {s2_paper_id[:12]}…, "
                 f"supplementing with OpenAlex"
             )
-            oa_refs = await self._get_openalex_references(s2_paper_id)
+            oa_refs = await self._get_openalex_references(s2_paper_id, limit=limit)
             existing_ids = {r.paper_id for r in refs}
             for r in oa_refs:
                 if r.paper_id not in existing_ids:
@@ -297,18 +426,27 @@ class SmartPaperResolver:
         if config.S2_API_KEY:
             headers["x-api-key"] = config.S2_API_KEY
 
+        is_tier2 = not config.S2_API_KEY
+        # Skip S2 search if S2 is in backoff
+        if not self.s2_is_usable:
+            return await self._search_openalex(query, limit)
+
         await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.get(url, params=params, headers=headers)
             if resp.status_code == 429:
                 await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
+                if is_tier2:
+                    self.mark_s2_down(duration=300)
                 logger.info(f"S2 search 429, falling back to OpenAlex for '{query}'")
                 return await self._search_openalex(query, limit)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:
             logger.warning(f"S2 search failed for '{query}': {e}, trying OpenAlex")
+            if is_tier2:
+                self.mark_s2_down(duration=180)
             return await self._search_openalex(query, limit)
 
         results = []
@@ -331,7 +469,11 @@ class SmartPaperResolver:
     # ─── Internal fetch helpers ───────────────────────────────────────────────
 
     async def _to_s2_id(self, identifier: str, id_type: str) -> Optional[str]:
-        """Translate any identifier type to a Semantic Scholar corpus ID."""
+        """Translate any identifier type to a Semantic Scholar corpus ID.
+
+        In Tier 2 (no S2 key, S2 down), returns None quickly so the caller
+        can fall through to _resolve_without_s2() which uses OpenAlex.
+        """
         if id_type == ID_TYPE_S2:
             return identifier
 
@@ -383,11 +525,19 @@ class SmartPaperResolver:
         if not prefix:
             return None
 
+        # Skip S2 translation if S2 is in backoff — let caller use OpenAlex path
+        if not self.s2_is_usable:
+            logger.debug(f"S2 in backoff — skipping ID translation for {prefix}:{identifier}")
+            return None
+
         s2_ref = f"{prefix}:{identifier}"
         url = f"https://api.semanticscholar.org/graph/v1/paper/{s2_ref}"
         params = {"fields": "paperId"}
 
-        for attempt in range(3):
+        is_tier2 = not config.S2_API_KEY
+        max_attempts = 1 if is_tier2 else 3
+
+        for attempt in range(max_attempts):
             await _s2_delay()
             await coordinated_rate_limiter.throttle("semantic_scholar")
             try:
@@ -395,8 +545,11 @@ class SmartPaperResolver:
                 if resp.status_code in (404, 400):
                     return None
                 if resp.status_code == 429:
+                    if is_tier2:
+                        self.mark_s2_down(duration=300)
+                        return None
                     wait = min(3 * (2 ** attempt), 10)
-                    logger.debug(f"S2 429 on ID translate, retrying in {wait}s (attempt {attempt+1}/3)")
+                    logger.debug(f"S2 429 on ID translate, retrying in {wait}s (attempt {attempt+1}/{max_attempts})")
                     await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
                     await asyncio.sleep(wait)
                     continue
@@ -404,17 +557,30 @@ class SmartPaperResolver:
                 return resp.json().get("paperId")
             except Exception as e:
                 logger.debug(f"S2 ID translation failed ({s2_ref}): {e}")
+                if is_tier2:
+                    self.mark_s2_down(duration=180)
                 return None
         return None
 
     async def _fetch_s2(self, s2_id: str) -> Optional[dict]:
-        """Fetch full metadata for a single paper from Semantic Scholar."""
+        """Fetch full metadata for a single paper from Semantic Scholar.
+
+        In Tier 2 (no API key): reduces retries from 3 to 1 and uses fast delay.
+        After a 429 in Tier 2, marks S2 as down to skip future calls.
+        """
+        # Skip entirely if S2 is in backoff
+        if not self.s2_is_usable:
+            return None
+
         client = await self._client()
         url = f"https://api.semanticscholar.org/graph/v1/paper/{s2_id}"
         params = {"fields": _S2_FIELDS}
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
 
-        for attempt in range(3):
+        is_tier2 = not config.S2_API_KEY
+        max_attempts = 1 if is_tier2 else 3  # Tier 2: no retries (fast fail)
+
+        for attempt in range(max_attempts):
             await _s2_delay()
             await coordinated_rate_limiter.throttle("semantic_scholar")
             try:
@@ -422,8 +588,11 @@ class SmartPaperResolver:
                 if resp.status_code == 404:
                     return None
                 if resp.status_code == 429:
+                    if is_tier2:
+                        self.mark_s2_down(duration=300)
+                        return None  # Don't retry in Tier 2
                     wait = min(3 * (2 ** attempt), 10)
-                    logger.debug(f"S2 429 on fetch, retrying in {wait}s (attempt {attempt+1}/3)")
+                    logger.debug(f"S2 429 on fetch, retrying in {wait}s (attempt {attempt+1}/{max_attempts})")
                     await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
                     await asyncio.sleep(wait)
                     continue
@@ -431,30 +600,41 @@ class SmartPaperResolver:
                 return self._parse_s2_response(resp.json())
             except httpx.HTTPStatusError as e:
                 logger.warning(f"S2 fetch failed for {s2_id}: {e}")
+                if is_tier2:
+                    self.mark_s2_down(duration=180)
                 return None
         return None
 
     async def _fetch_s2_batch(self, s2_ids: list[str]) -> list[dict]:
         """
         Fetch up to 500 papers in one S2 batch POST call.
+        Skips entirely if S2 is in backoff (Tier 2/3).
         """
+        if not self.s2_is_usable:
+            return []
+
         client = await self._client()
         url = "https://api.semanticscholar.org/graph/v1/paper/batch"
         params = {"fields": _S2_BATCH_FIELDS}
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
         body = {"ids": s2_ids}
 
+        is_tier2 = not config.S2_API_KEY
         await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.post(url, json=body, params=params, headers=headers)
             if resp.status_code == 429:
                 await coordinated_rate_limiter.record_rate_limit("semantic_scholar")
+                if is_tier2:
+                    self.mark_s2_down(duration=300)
                 return []
             resp.raise_for_status()
             items = resp.json()
         except Exception as e:
             logger.warning(f"S2 batch fetch failed: {e}")
+            if is_tier2:
+                self.mark_s2_down(duration=180)
             return []
 
         results = []
@@ -532,6 +712,7 @@ class SmartPaperResolver:
                 doi=doi,
                 url=f"https://openalex.org/{oa_id}" if oa_id else "",
                 text_tier=3 if parsed.get("abstract") else 4,
+                fields_of_study=parsed.get("fields_of_study") or [],
             ))
         logger.info(f"OpenAlex search returned {len(results)} results for '{query}'")
         return results
@@ -542,28 +723,37 @@ class SmartPaperResolver:
         Looks up the paper's DOI in our DB, queries OpenAlex for its
         referenced_works, then batch-resolves DOIs to S2 IDs.
         Returns at most `limit` references (respects MAX_REFS_PER_PAPER).
+
+        If no DOI is available, falls back to title-based search in OpenAlex.
         """
         doi = self._lookup_paper_doi(paper_id)
-        if not doi:
-            logger.debug(f"No DOI in cache for {paper_id[:12]}… — cannot fall back to OpenAlex refs")
-            return []
-
         client = await self._client()
 
-        # Step 1: Get referenced_works list from OpenAlex
-        await coordinated_rate_limiter.throttle("openalex")
-        try:
-            resp = await client.get(
-                f"https://api.openalex.org/works/doi:{doi}",
-                params=self._oa_params({"select": "id,referenced_works"}),
-                headers=self._oa_headers(),
-            )
-            if resp.status_code != 200:
+        if doi:
+            # Primary path: look up by DOI (fast, exact match)
+            await coordinated_rate_limiter.throttle("openalex")
+            try:
+                resp = await client.get(
+                    f"https://api.openalex.org/works/doi:{doi}",
+                    params=self._oa_params({"select": "id,referenced_works"}),
+                    headers=self._oa_headers(),
+                )
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+            except Exception as e:
+                logger.debug(f"OpenAlex reference lookup failed for DOI {doi}: {e}")
                 return []
-            data = resp.json()
-        except Exception as e:
-            logger.debug(f"OpenAlex reference lookup failed for DOI {doi}: {e}")
-            return []
+        else:
+            # Fallback: no DOI → search by title to find the OpenAlex work
+            title = self._lookup_paper_title(paper_id)
+            if not title or title in ("(Metadata pending)", "Unknown"):
+                logger.debug(f"No DOI or title for {paper_id[:12]}… — cannot get OpenAlex refs")
+                return []
+            data = await self._find_openalex_work_by_title(title)
+            if not data:
+                logger.debug(f"OpenAlex title search found no match for {paper_id[:12]}…")
+                return []
 
         ref_urls = data.get("referenced_works", [])
         if not ref_urls:
@@ -581,35 +771,40 @@ class SmartPaperResolver:
             return []
 
         # Step 2: Batch-fetch referenced works from OpenAlex
-        await coordinated_rate_limiter.throttle("openalex")
-        try:
-            id_filter = "|".join(ref_oa_ids)
-            resp = await client.get(
-                "https://api.openalex.org/works",
-                params=self._oa_params({
-                    "filter": f"openalex:{id_filter}",
-                    "per_page": min(limit, 100),
-                    "select": _OA_FIELDS,
-                }),
-                headers=self._oa_headers(),
-            )
-            if resp.status_code != 200:
-                return []
-            refs_data = resp.json()
-        except Exception as e:
-            logger.debug(f"OpenAlex batch reference fetch failed: {e}")
-            return []
-
-        # Parse references and collect DOIs
+        # Batch into groups of 25 to avoid URL length limits (~2000 char max).
+        # Each OpenAlex ID is ~12 chars + pipe separator = ~325 chars per batch.
         parsed_refs = []
         dois_to_resolve = []
-        for item in refs_data.get("results", []):
-            parsed = self._parse_openalex_response(item)
-            if not parsed or not parsed.get("title"):
+        OA_BATCH_SIZE = 25
+
+        for batch_start in range(0, len(ref_oa_ids), OA_BATCH_SIZE):
+            batch_ids = ref_oa_ids[batch_start:batch_start + OA_BATCH_SIZE]
+            await coordinated_rate_limiter.throttle("openalex")
+            try:
+                id_filter = "|".join(batch_ids)
+                resp = await client.get(
+                    "https://api.openalex.org/works",
+                    params=self._oa_params({
+                        "filter": f"openalex:{id_filter}",
+                        "per_page": len(batch_ids),
+                        "select": _OA_FIELDS,
+                    }),
+                    headers=self._oa_headers(),
+                )
+                if resp.status_code != 200:
+                    continue
+                batch_data = resp.json()
+            except Exception as e:
+                logger.debug(f"OpenAlex batch reference fetch failed (batch {batch_start}): {e}")
                 continue
-            parsed_refs.append(parsed)
-            if parsed.get("doi"):
-                dois_to_resolve.append(parsed["doi"])
+
+            for item in batch_data.get("results", []):
+                parsed = self._parse_openalex_response(item)
+                if not parsed or not parsed.get("title"):
+                    continue
+                parsed_refs.append(parsed)
+                if parsed.get("doi"):
+                    dois_to_resolve.append(parsed["doi"])
 
         # Step 3: Batch-resolve DOIs to S2 IDs (graph needs S2 IDs for consistency)
         doi_to_s2 = await self._batch_resolve_dois_to_s2(dois_to_resolve)
@@ -640,6 +835,7 @@ class SmartPaperResolver:
                 doi=ref_doi,
                 url=paper_url,
                 text_tier=3 if ref.get("abstract") else 4,
+                fields_of_study=ref.get("fields_of_study") or [],
             )
             # Cache the paper so BFS at deeper levels can find its DOI
             self._save_to_cache(paper)
@@ -656,6 +852,10 @@ class SmartPaperResolver:
         Batch-translate DOIs to S2 paper IDs.
         Checks DB cache first, then uses S2's batch endpoint for the rest.
         Returns {doi: s2_paper_id} mapping.
+
+        When S2 is down (Tier 2 backoff or Tier 3), skips the S2 API call
+        and returns only DB-cached results. This is fast and avoids wasting
+        time on API calls that will 429.
         """
         if not dois:
             return {}
@@ -679,11 +879,20 @@ class SmartPaperResolver:
         if not uncached:
             return result
 
+        # Skip S2 API call if S2 is in backoff (Tier 2 post-429 or Tier 3)
+        if not self.s2_is_usable:
+            logger.debug(
+                f"S2 in backoff — skipping batch DOI resolution for {len(uncached)} DOIs "
+                f"({len(result)} resolved from DB cache)"
+            )
+            return result
+
         # S2 batch endpoint with DOI: prefix identifiers
         client = await self._client()
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
         s2_ids = [f"DOI:{d}" for d in uncached[:500]]
 
+        is_tier2 = not config.S2_API_KEY
         await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
@@ -694,12 +903,16 @@ class SmartPaperResolver:
                 headers=headers,
             )
             if resp.status_code == 429:
-                logger.debug("S2 batch DOI resolution also 429'd — returning DB-cached results only")
+                logger.debug("S2 batch DOI resolution 429'd — returning DB-cached results only")
+                if is_tier2:
+                    self.mark_s2_down(duration=300)
                 return result
             resp.raise_for_status()
             items = resp.json()
         except Exception as e:
             logger.debug(f"S2 batch DOI resolution failed: {e}")
+            if is_tier2:
+                self.mark_s2_down(duration=180)
             return result
 
         for item, doi in zip(items, uncached):
@@ -745,6 +958,7 @@ class SmartPaperResolver:
             url=f"https://www.semanticscholar.org/paper/{s2_id}",
             text_tier=3 if oa_data.get("abstract") else 4,
             source_ids={"s2": s2_id, "openalex": oa_data.get("openalex_id")},
+            fields_of_study=oa_data.get("fields_of_study") or [],
         )
         self._save_to_cache(paper)
         logger.info(f"Resolved {s2_id[:12]}… via OpenAlex fallback (DOI: {doi_for_oa})")
@@ -772,14 +986,20 @@ class SmartPaperResolver:
         else:
             return None
 
-        # Check if we already have this DOI in our DB with a real paper_id
+        # Check if we already have this DOI in our DB with a real paper_id.
+        # NO TTL filter here — if a real S2 ID exists for this DOI, always reuse it
+        # to prevent creating a duplicate synthetic ID for the same paper.
         try:
-            row = db.fetchone("SELECT paper_id FROM papers WHERE doi = %s", (doi,))
+            row = db.fetchone(
+                "SELECT paper_id, title, abstract, year, citation_count, "
+                "fields_of_study, authors, doi, url, text_tier, is_retracted, "
+                "language, canonical_id, source_ids, venue "
+                "FROM papers WHERE doi = %s LIMIT 1",
+                (doi,),
+            )
             if row:
-                cached = self._load_from_cache(row["paper_id"])
-                if cached:
-                    logger.info(f"Resolved {doi} from DB cache (existing paper_id)")
-                    return cached
+                logger.info(f"Resolved {doi} from DB cache (existing paper_id, no TTL)")
+                return Paper.from_db_row(row)
         except Exception:
             pass
 
@@ -807,6 +1027,7 @@ class SmartPaperResolver:
             url=f"https://doi.org/{doi}",
             text_tier=3 if oa_data.get("abstract") else 4,
             source_ids={"openalex": oa_data.get("openalex_id"), "doi": doi},
+            fields_of_study=oa_data.get("fields_of_study") or [],
         )
         self._save_to_cache(paper)
         logger.info(f"Resolved {doi} via OpenAlex-only (synthetic ID: {synthetic_id[:12]}…)")
@@ -821,6 +1042,69 @@ class SmartPaperResolver:
             )
             return row["doi"] if row and row.get("doi") else None
         except Exception:
+            return None
+
+    @staticmethod
+    def _lookup_paper_title(paper_id: str) -> Optional[str]:
+        """Look up a paper's title from our DB cache."""
+        try:
+            row = db.fetchone(
+                "SELECT title FROM papers WHERE paper_id = %s", (paper_id,),
+            )
+            return row["title"] if row and row.get("title") else None
+        except Exception:
+            return None
+
+    async def _find_openalex_work_by_title(self, title: str) -> Optional[dict]:
+        """
+        Search OpenAlex for a work by title and return its metadata
+        (including referenced_works). Used as fallback when no DOI is available.
+        Returns the best-matching result dict, or None.
+        """
+        client = await self._client()
+        await coordinated_rate_limiter.throttle("openalex")
+        try:
+            resp = await client.get(
+                "https://api.openalex.org/works",
+                params=self._oa_params({
+                    "search": title[:200],
+                    "per_page": 1,
+                    "select": "id,title,referenced_works,doi",
+                }),
+                headers=self._oa_headers(),
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                return None
+            # Basic sanity check: title should partially match
+            # Filter stop words to prevent false matches on short/generic titles
+            _STOP_WORDS = {
+                "a", "an", "the", "of", "in", "on", "at", "to", "for", "and",
+                "or", "is", "are", "was", "were", "be", "been", "by", "with",
+                "from", "as", "its", "it", "this", "that", "their", "not", "no",
+            }
+            best = results[0]
+            best_title = (best.get("title") or "").lower()
+            query_title = title.lower()
+            query_words = set(query_title.split()) - _STOP_WORDS
+            match_words = set(best_title.split()) - _STOP_WORDS
+            # Require at least 3 content words and 60% overlap
+            if len(query_words) < 3:
+                logger.debug(f"Title too short for reliable match ({len(query_words)} content words): '{title[:40]}…'")
+                return None
+            if not match_words:
+                logger.debug(f"OpenAlex result has no content words in title — rejecting")
+                return None
+            overlap = len(query_words & match_words) / max(len(query_words), 1)
+            if overlap < 0.6:
+                logger.debug(f"OpenAlex title match too weak ({overlap:.0%}) for '{title[:40]}…'")
+                return None
+            return best
+        except Exception as e:
+            logger.debug(f"OpenAlex title search failed for '{title[:40]}…': {e}")
             return None
 
     # ─── Response parsers ─────────────────────────────────────────────────────
@@ -869,6 +1153,16 @@ class SmartPaperResolver:
         doi_raw = data.get("doi") or ""
         doi = doi_raw.replace("https://doi.org/", "").replace("http://doi.org/", "")
 
+        # Extract fields_of_study from OpenAlex concepts
+        # OpenAlex "concepts" map roughly to S2 "fieldsOfStudy"
+        fields_of_study = []
+        for concept in (data.get("concepts") or []):
+            name = concept.get("display_name")
+            level = concept.get("level", 99)
+            # Only include top-level concepts (level 0-1) for clean field colors
+            if name and level <= 1:
+                fields_of_study.append(name)
+
         return {
             "_source":    "openalex",
             "openalex_id": data.get("id"),
@@ -878,6 +1172,7 @@ class SmartPaperResolver:
             "citation_count": data.get("cited_by_count", 0),
             "authors":    authors,
             "doi":        doi or None,
+            "fields_of_study": fields_of_study,
         }
 
     # ─── DB caching ──────────────────────────────────────────────────────────
@@ -922,6 +1217,18 @@ class SmartPaperResolver:
                     abstract       = COALESCE(EXCLUDED.abstract, papers.abstract),
                     year           = COALESCE(EXCLUDED.year, papers.year),
                     citation_count = EXCLUDED.citation_count,
+                    doi            = COALESCE(EXCLUDED.doi, papers.doi),
+                    url            = COALESCE(EXCLUDED.url, papers.url),
+                    fields_of_study = CASE
+                        WHEN EXCLUDED.fields_of_study::text != '[]'
+                        THEN EXCLUDED.fields_of_study
+                        ELSE papers.fields_of_study
+                    END,
+                    authors        = CASE
+                        WHEN EXCLUDED.authors::text != '[]'
+                        THEN EXCLUDED.authors
+                        ELSE papers.authors
+                    END,
                     source_ids     = EXCLUDED.source_ids,
                     created_at     = NOW()
                 """,

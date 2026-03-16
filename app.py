@@ -383,28 +383,49 @@ def create_app():
         canonical_id, id_type = normalize_user_input(paper_id_raw)
         paper_id = canonical_id if canonical_id else paper_id_raw
 
-        # Rate limiting
-        allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
-        if not allowed:
-            return jsonify(rate_limiter.get_429_body(headers)), 429, headers
+        # NOTE: Rate limiting is applied AFTER cache check (below) to avoid
+        # consuming build quota (3/hour) on cached graph hits. The rate limit
+        # is only enforced before starting a fresh build.
 
         # Check for recently cached graph (within GRAPH_CACHE_TTL_DAYS)
-        cached_graph = db.fetchone(
-            """
-            SELECT g.graph_id, g.graph_json_url
-            FROM graphs g
-            JOIN session_graphs sg ON sg.graph_id = g.graph_id
-            WHERE sg.session_id = %s
-              AND g.seed_paper_id IN (
-                SELECT paper_id FROM papers
-                WHERE paper_id = %s OR doi = %s
-              )
-              AND g.computed_at > NOW() - INTERVAL '7 days'
-            ORDER BY g.computed_at DESC
-            LIMIT 1
-            """,
-            (session_id, paper_id, paper_id),
-        )
+        # SESSION-INDEPENDENT: looks up by seed_paper_id directly, without
+        # requiring the graph to be linked to the current session. This means
+        # a graph built in session A is visible to session B.
+        # We link the current session afterward so history tracking still works.
+        #
+        # DOI matching is only used when the input looks like a DOI/arXiv ID,
+        # to avoid false matches when paper_id is a title string.
+        from backend.normalizer import ID_TYPE_DOI, ID_TYPE_ARXIV
+        cache_ttl_days = Config.GRAPH_CACHE_TTL_DAYS  # default 7, configurable via env
+        if id_type in (ID_TYPE_DOI, ID_TYPE_ARXIV):
+            # Input is a DOI-like identifier — match by paper_id OR doi
+            cached_graph = db.fetchone(
+                """
+                SELECT g.graph_id, g.graph_json_url
+                FROM graphs g
+                WHERE g.seed_paper_id IN (
+                    SELECT paper_id FROM papers
+                    WHERE paper_id = %s OR doi = %s
+                  )
+                  AND g.computed_at > NOW() - make_interval(days => %s)
+                ORDER BY g.computed_at DESC
+                LIMIT 1
+                """,
+                (paper_id, paper_id, cache_ttl_days),
+            )
+        else:
+            # Input is an S2 ID, title, or other — match by paper_id only
+            cached_graph = db.fetchone(
+                """
+                SELECT g.graph_id, g.graph_json_url
+                FROM graphs g
+                WHERE g.seed_paper_id = %s
+                  AND g.computed_at > NOW() - make_interval(days => %s)
+                ORDER BY g.computed_at DESC
+                LIMIT 1
+                """,
+                (paper_id, cache_ttl_days),
+            )
 
         # If cached, stream it immediately and finish
         if cached_graph:
@@ -418,6 +439,19 @@ def create_app():
                     "falling through to fresh build"
                 )
             else:
+                # Link this session to the cached graph (for history tracking)
+                try:
+                    db.execute(
+                        """
+                        INSERT INTO session_graphs (session_id, graph_id, created_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (session_id, graph_id) DO NOTHING
+                        """,
+                        (session_id, cached_graph["graph_id"]),
+                    )
+                except Exception:
+                    pass  # Non-fatal: graph still loads even if session link fails
+
                 # Attach panel data (DNA, diversity, leaderboard) from DB.
                 # R2 stores the raw graph JSON before panel data is computed,
                 # so cached graphs need this enrichment step.
@@ -439,6 +473,15 @@ def create_app():
                 except Exception as exc:
                     logger.warning(f"Failed to attach panel data to cached graph: {exc}")
 
+                # Update last_accessed for TTL tracking
+                try:
+                    db.execute(
+                        "UPDATE graphs SET last_accessed = NOW() WHERE graph_id = %s",
+                        (cached_graph["graph_id"],),
+                    )
+                except Exception:
+                    pass
+
                 def _cached_stream():
                     payload = {"status": "done", "cached": True, "graph": graph_data}
                     yield f"data: {json.dumps(payload)}\n\n"
@@ -450,24 +493,31 @@ def create_app():
                 )
 
         # ── Reconnection guard: reuse existing in-progress build ──────────
-        # When EventSource reconnects (Koyeb timeout, network blip), reuse
-        # the existing build thread instead of spawning a duplicate.
+        # When EventSource reconnects (Koyeb timeout, network blip, page reload),
+        # reuse the existing build thread instead of spawning a duplicate.
+        # SESSION-INDEPENDENT: match by paper_id across ALL sessions — a build
+        # started by session A can be reused by session B for the same paper.
         existing_job = db.fetchone(
             """
             SELECT job_id FROM build_jobs
-            WHERE paper_id = %s AND session_id = %s AND status = 'pending'
+            WHERE paper_id = %s AND status = 'pending'
               AND created_at > NOW() - INTERVAL '10 minutes'
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (paper_id[:200], session_id),
+            (paper_id[:200],),
         )
 
         if existing_job:
-            # Existing build is running — just poll its events
+            # Existing build is running — just poll its events (no rate limit consumed)
             job_id = existing_job["job_id"]
             logger.info(f"SSE reconnect: reusing build job {job_id} for {paper_id[:20]}…")
         else:
+            # Fresh build required — apply rate limit NOW (not for cache hits or reconnects)
+            allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
+            if not allowed:
+                return jsonify(rate_limiter.get_429_body(headers)), 429, headers
+
             # No existing build — create new job and start background thread
             job_id = str(uuid.uuid4())
             db.execute(
@@ -478,6 +528,10 @@ def create_app():
                 (job_id, paper_id[:200], session_id),
             )
 
+            # Extract user info BEFORE spawning background thread
+            # (Flask request context is unavailable in background threads)
+            _pre_user = get_current_user() if Config.ENABLE_AUTH else None
+
             def _background_build():
                 engine = AncestryGraph()
                 try:
@@ -487,9 +541,8 @@ def create_app():
                         (job_id,),
                     )
                     # Link graph to authenticated user (enables persistent history)
-                    if Config.ENABLE_AUTH:
-                        _link_user = get_current_user()
-                        if _link_user:
+                    if _pre_user:
+                        try:
                             _built_graph = db.fetchone(
                                 "SELECT graph_id FROM graphs WHERE seed_paper_id = %s "
                                 "ORDER BY created_at DESC LIMIT 1",
@@ -498,16 +551,20 @@ def create_app():
                             if _built_graph:
                                 db.execute(
                                     "UPDATE graphs SET user_id = %s::uuid WHERE graph_id = %s",
-                                    (str(_link_user["user_id"]), _built_graph["graph_id"]),
+                                    (str(_pre_user["user_id"]), _built_graph["graph_id"]),
                                 )
+                        except Exception as ue:
+                            logger.warning(f"Failed to link graph to user: {ue}")
                 except Exception as e:
-                    app.logger.error(f"Background build failed for job {job_id}: {e}", exc_info=True)
+                    logger.error(f"Background build failed for job {job_id}: {e}", exc_info=True)
                     db.execute(
                         """
                         INSERT INTO job_events (job_id, sequence, event_data, created_at)
-                        VALUES (%s, 1, %s::jsonb, NOW())
+                        VALUES (%s,
+                                COALESCE((SELECT MAX(sequence) FROM job_events WHERE job_id = %s), 0) + 1,
+                                %s::jsonb, NOW())
                         """,
-                        (job_id, json.dumps({"status": "error", "message": str(e)[:500]})),
+                        (job_id, job_id, json.dumps({"status": "error", "message": str(e)[:500]})),
                     )
                     db.execute(
                         "UPDATE build_jobs SET status = 'error' WHERE job_id = %s",
@@ -548,8 +605,14 @@ def create_app():
                     for ev in events:
                         sequence = ev["id"]
                         data = ev["event_data"]
+                        # Guard: psycopg2 may return JSONB as string or dict
+                        if isinstance(data, str):
+                            try:
+                                data = json.loads(data)
+                            except (json.JSONDecodeError, TypeError):
+                                data = {"status": "error", "message": "Malformed event data"}
                         yield f"id: {sequence}\ndata: {json.dumps(data)}\n\n"
-                        if data.get("status") in ("done", "error"):
+                        if isinstance(data, dict) and data.get("status") in ("done", "error"):
                             return
 
                     if not events:
@@ -565,7 +628,7 @@ def create_app():
 
             except GeneratorExit:
                 # Client disconnected — clean up and exit silently
-                app.logger.debug(f"SSE client disconnected for job {job_id}")
+                logger.debug(f"SSE client disconnected for job {job_id}")
                 return
 
         return Response(
@@ -589,10 +652,10 @@ def create_app():
             """
             SELECT graph_json_url FROM graphs
             WHERE seed_paper_id = %s
-            AND computed_at > NOW() - INTERVAL '7 days'
+            AND computed_at > NOW() - make_interval(days => %s)
             ORDER BY computed_at DESC LIMIT 1
             """,
-            (paper_id,),
+            (paper_id, Config.GRAPH_CACHE_TTL_DAYS),
         )
         if not row:
             return jsonify({
@@ -611,10 +674,33 @@ def create_app():
 
     def _load_graph_for_request(paper_id: str, session_id: str):
         """
-        Load a cached graph for the given paper_id and session_id.
+        Load a cached graph for the given paper_id.
         Returns (AncestryGraph, graph_row) or (None, None) if not found.
-        The session_id check ensures users can only access their own graphs.
+
+        SESSION-INDEPENDENT: First tries session-scoped lookup (for history
+        consistency), then falls back to any recent graph for this paper_id.
+        This ensures prune/DNA/diversity work even when the graph was built
+        in a different session (cross-session cache sharing).
+
+        DOI-AWARE: The paper_id may be a raw DOI (from the URL), but
+        graphs.seed_paper_id stores the resolved S2 paper ID. We handle
+        this by also checking the papers table's doi column.
         """
+        # Resolve DOI → canonical paper_id if the input looks like a DOI.
+        # The user may pass a raw DOI but seed_paper_id is always the S2 ID.
+        resolved_id = paper_id
+        if "/" in paper_id or paper_id.lower().startswith("10."):
+            try:
+                id_row = db.fetchone(
+                    "SELECT paper_id FROM papers WHERE doi = %s LIMIT 1",
+                    (paper_id,),
+                )
+                if id_row:
+                    resolved_id = id_row["paper_id"]
+            except Exception:
+                pass  # Fall through with original paper_id
+
+        # Try 1: Session-scoped lookup (preferred — maintains history link)
         row = db.fetchone(
             """
             SELECT g.graph_id, g.graph_json_url, g.leaderboard_json,
@@ -625,8 +711,37 @@ def create_app():
             ORDER BY g.created_at DESC
             LIMIT 1
             """,
-            (paper_id, session_id),
+            (resolved_id, session_id),
         )
+
+        # Try 2: Session-independent fallback — find any recent graph for this paper
+        if not row:
+            row = db.fetchone(
+                """
+                SELECT g.graph_id, g.graph_json_url, g.leaderboard_json,
+                       g.dna_json, g.diversity_json
+                FROM graphs g
+                WHERE g.seed_paper_id = %s
+                  AND g.computed_at > NOW() - make_interval(days => %s)
+                ORDER BY g.computed_at DESC
+                LIMIT 1
+                """,
+                (resolved_id, Config.GRAPH_CACHE_TTL_DAYS),
+            )
+            # If found, create session link for future calls
+            if row:
+                try:
+                    db.execute(
+                        """
+                        INSERT INTO session_graphs (session_id, graph_id, created_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (session_id, graph_id) DO NOTHING
+                        """,
+                        (session_id, row["graph_id"]),
+                    )
+                except Exception:
+                    pass  # Non-fatal
+
         if not row:
             return None, None
 
@@ -691,7 +806,7 @@ def create_app():
 
     # ─── GET /api/dna/<paper_id> ──────────────────────────────────────────
 
-    @app.route("/api/dna/<paper_id>")
+    @app.route("/api/dna/<path:paper_id>")
     @require_session
     def api_dna(paper_id: str):
         """Return DNA profile for a previously built graph."""
@@ -721,7 +836,7 @@ def create_app():
 
     # ─── GET /api/diversity/<paper_id> ────────────────────────────────────
 
-    @app.route("/api/diversity/<paper_id>")
+    @app.route("/api/diversity/<path:paper_id>")
     @require_session
     def api_diversity(paper_id: str):
         """Return diversity score for a previously built graph."""
@@ -753,7 +868,7 @@ def create_app():
 
     # ─── GET /api/orphans/<seed_id> ───────────────────────────────────────
 
-    @app.route("/api/orphans/<seed_id>")
+    @app.route("/api/orphans/<path:seed_id>")
     @require_session
     def api_orphans(seed_id: str):
         """Return orphan ideas detected in the graph."""
@@ -777,7 +892,7 @@ def create_app():
 
     # ─── GET /api/gaps/<seed_id> ──────────────────────────────────────────
 
-    @app.route("/api/gaps/<seed_id>")
+    @app.route("/api/gaps/<path:seed_id>")
     @require_session
     def api_gaps(seed_id: str):
         """Return research gap suggestions for a graph."""
@@ -811,7 +926,7 @@ def create_app():
 
     # ─── GET /api/genealogy/<paper_id> ────────────────────────────────────
 
-    @app.route("/api/genealogy/<paper_id>")
+    @app.route("/api/genealogy/<path:paper_id>")
     @require_session
     def api_genealogy(paper_id: str):
         """Return LLM-generated genealogy story for a graph."""
@@ -2604,7 +2719,7 @@ def create_app():
         return jsonify(InterdisciplinaryTranslator().translate(graph_data))
 
     # ── Coverage Report (F7.4) ────────────────────────────────────────────
-    @app.route("/api/coverage-report/<seed_paper_id>")
+    @app.route("/api/coverage-report/<path:seed_paper_id>")
     @require_session
     def api_coverage_report(seed_paper_id: str):
         session_id = session_manager.get_session_id(request)
