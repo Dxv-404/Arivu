@@ -19,14 +19,16 @@ class GraphLoader {
     this.eventSource = new EventSource(url);
     this._lastEventTime = Date.now();
 
-    // Timeout: if no SSE event received for 90s, show error instead of hanging
+    // Timeout: if no SSE event received for 180s, show error instead of hanging.
+    // NLP worker on HuggingFace Spaces can take 60-90s to wake from cold start,
+    // so 180s gives enough headroom for wake + first embedding batch.
     this._stallTimer = setInterval(() => {
-      if (Date.now() - this._lastEventTime > 90000) {
+      if (Date.now() - this._lastEventTime > 180000) {
         clearInterval(this._stallTimer);
         this.eventSource.close();
         this._showError('Graph build is taking too long. The server may be busy — try again later or try a different paper.');
       }
-    }, 10000);
+    }, 15000);
 
     this.eventSource.addEventListener('message', (e) => {
       this._lastEventTime = Date.now();
@@ -43,6 +45,7 @@ class GraphLoader {
 
   _handleEvent(data) {
     switch(data.status) {
+      case 'keepalive':  break; // Silent — stall timer already reset by message listener
       case 'searching':  this._updateProgress('🔍', data.message || 'Searching...', 5); break;
       case 'crawling':   this._updateProgress('🕸️', data.message || 'Crawling references...', 20); break;
       case 'analyzing':  this._updateProgress('🧠', data.message || 'Analysing relationships...', 60); break;

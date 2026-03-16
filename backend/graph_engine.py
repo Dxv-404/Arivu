@@ -306,13 +306,15 @@ class AncestryGraph:
         self._ensure_dag()
 
         # ── Step 4: Populate paper embeddings (for Phase 3+ pgvector search) ─
-        await self._emit("analyzing", "Encoding paper embeddings…")
+        await self._emit("analyzing", "Waking up NLP worker (may take up to 60 s on first request)…")
         await self._populate_embeddings(all_papers)
+        await self._emit("analyzing", "Embeddings complete.")
 
         # ── Step 5: NLP analysis ──────────────────────────────────────────
+        num_edges = len(self.graph.edges())
         await self._emit(
             "analyzing",
-            f"Running NLP analysis on {len(self.graph.edges())} edges…"
+            f"Running NLP analysis on {num_edges} edges…"
         )
         edges = list(self.graph.edges())
         edge_analyses = await self._nlp.analyze_edges(edges, all_papers, self.graph)
@@ -537,6 +539,7 @@ class AncestryGraph:
             return
 
         logger.info(f"Encoding embeddings for {len(to_encode)} papers")
+        await self._emit("analyzing", f"Encoding {len(to_encode)} paper embeddings (NLP worker may need 30-60 s to wake)…")
 
         # Build text list (abstract preferred, title fallback)
         texts = [
@@ -555,6 +558,9 @@ class AncestryGraph:
             ) as client:
                 for i in range(0, len(texts), chunk_size):
                     chunk = texts[i:i + chunk_size]
+                    chunk_num = i // chunk_size + 1
+                    total_chunks = (len(texts) + chunk_size - 1) // chunk_size
+                    await self._emit("analyzing", f"Sending embedding batch {chunk_num}/{total_chunks} to NLP worker…")
                     try:
                         resp = await client.post(
                             f"{config.NLP_WORKER_URL}/encode_batch",

@@ -536,8 +536,10 @@ def create_app():
                             return
 
                     if not events:
-                        # Send keepalive every 2s to prevent Koyeb/proxy timeout
-                        yield ": keepalive\n\n"
+                        # Send keepalive every 2s to prevent Koyeb/proxy timeout.
+                        # Must be a real data: frame (not a comment) so the client
+                        # EventSource.onmessage fires and resets the stall timer.
+                        yield f"data: {json.dumps({'status': 'keepalive'})}\n\n"
                         time.sleep(2)
                     else:
                         time.sleep(0.3)
