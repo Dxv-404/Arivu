@@ -221,9 +221,14 @@ def register():
         if migrated and migrated > 0:
             logger.info(f"Migrated {migrated} anonymous graphs to user_id={user_id}")
 
-    send_verification_email(email, display_name, token_str)
-
-    return jsonify({"success": True, "message": "Check your email to verify your account."})
+    if Config.email_enabled():
+        send_verification_email(email, display_name, token_str)
+        return jsonify({"success": True, "message": "Check your email to verify your account."})
+    else:
+        # No email provider configured — auto-verify so users can log in
+        db.execute("UPDATE users SET email_verified = TRUE WHERE user_id = %s::uuid", (user_id,))
+        logger.info(f"Auto-verified user {user_id} (email disabled)")
+        return jsonify({"success": True, "message": "Account created! You can now log in."})
 
 
 # ── GET /verify-email ─────────────────────────────────────────────────────────

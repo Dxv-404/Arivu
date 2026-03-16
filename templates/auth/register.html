@@ -6,7 +6,7 @@
     <div class="auth-header">
       <a href="/" class="auth-logo">Arivu</a>
       <h1>Create your account</h1>
-      <p class="auth-subhead">Free — 10 graphs per month</p>
+      <p class="auth-subhead">Free — unlimited graphs</p>
     </div>
     <div id="auth-error"   class="auth-error"  hidden></div>
     <div id="auth-success" class="auth-success" hidden></div>
@@ -51,7 +51,7 @@ form.addEventListener('submit', async (e) => {
   });
   const data = await resp.json().catch(() => ({}));
   btn.disabled = false; btn.textContent = 'Create account';
-  if (data.success) { form.style.display = 'none'; ok.textContent = data.message || 'Check your email to verify.'; ok.hidden = false; }
+  if (data.success) { form.style.display = 'none'; ok.innerHTML = data.message || 'Check your email to verify.'; if (data.message && data.message.includes('log in')) { ok.innerHTML += ' <a href="/login" style="color:#D4A843;font-weight:600;">Log in →</a>'; } ok.hidden = false; }
   else { err.textContent = data.message || 'Registration failed.'; err.hidden = false; if (window.hcaptcha) window.hcaptcha.reset(); }
 });
 </script>

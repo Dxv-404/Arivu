@@ -17,13 +17,25 @@ class GraphLoader {
   start() {
     const url = `/api/graph/stream?paper_id=${encodeURIComponent(this.paperId)}&goal=${this.goal}`;
     this.eventSource = new EventSource(url);
+    this._lastEventTime = Date.now();
+
+    // Timeout: if no SSE event received for 90s, show error instead of hanging
+    this._stallTimer = setInterval(() => {
+      if (Date.now() - this._lastEventTime > 90000) {
+        clearInterval(this._stallTimer);
+        this.eventSource.close();
+        this._showError('Graph build is taking too long. The server may be busy — try again later or try a different paper.');
+      }
+    }, 10000);
 
     this.eventSource.addEventListener('message', (e) => {
+      this._lastEventTime = Date.now();
       try { this._handleEvent(JSON.parse(e.data)); } catch(err) { console.error('SSE parse error', err); }
     });
 
     this.eventSource.addEventListener('error', () => {
       if (this.eventSource.readyState === EventSource.CLOSED) {
+        clearInterval(this._stallTimer);
         this._showError('Connection to server was lost. Please refresh.');
       }
     });
@@ -37,6 +49,7 @@ class GraphLoader {
       case 'computing':  this._updateProgress('⚡', data.message || 'Computing insights...', 85); break;
       case 'done':
         this._updateProgress('✅', 'Graph ready!', 100);
+        clearInterval(this._stallTimer);
         this.eventSource.close();
         if (data.cached) {
           fetch(data.graph_url).then(r => r.json()).then(g => this._initGraph(g));
@@ -46,6 +59,7 @@ class GraphLoader {
         break;
       case 'error':
         this._showError(data.message || 'Graph build failed.');
+        clearInterval(this._stallTimer);
         this.eventSource.close();
         break;
     }
@@ -189,6 +203,17 @@ class GraphLoader {
   }
 }
 
+// Slug → S2 corpus ID mapping for gallery papers
+const GALLERY_S2_IDS = {
+  attention: '204e3073870fae3d05bcbc2f6a8e263d9b72e776',
+  alexnet:   'abd1c342495432171beb7ca8fd9551ef13cbd0ff',
+  bert:      'df2b0e26d0599ce3e70df8a9da02e51594e0e992',
+  gans:      '54e325aee6b2d476bbbb88615ac15e251c6e8214',
+  word2vec:  '330da625c15427c6e42ccfa3b747fb29e5835bf0',
+  resnet:    '2c03df8b48bf3fa39054345bafabfeff15bfd11d',
+  gpt2:      '9405cc0d6169988371b2755e573cc28650d14dfe',
+};
+
 // Auto-initialize on tool page
 document.addEventListener('DOMContentLoaded', () => {
   const cfg = window.ARIVU_CONFIG;
@@ -197,9 +222,23 @@ document.addEventListener('DOMContentLoaded', () => {
   if (cfg.isGallery) {
     // Gallery: load precomputed JSON directly
     fetch(`/static/previews/${cfg.paperId}/graph.json`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(g => new GraphLoader(cfg.paperId)._initGraph(g))
-      .catch(() => new GraphLoader(cfg.paperId).start());
+      .catch(() => {
+        // Precomputed graph not available — fall back to SSE build with real S2 ID
+        const realId = GALLERY_S2_IDS[cfg.paperId];
+        if (realId) {
+          new GraphLoader(realId).start();
+        } else {
+          // Unknown slug — show error instead of hanging
+          const overlay = document.getElementById('loading-overlay');
+          if (overlay) overlay.innerHTML = '<div class="loading-inner"><p style="color:var(--danger)">This gallery paper has not been precomputed yet. Building graph from scratch...</p></div>';
+          new GraphLoader(cfg.paperId).start();
+        }
+      });
   } else {
     new GraphLoader(cfg.paperId).start();
   }

@@ -87,6 +87,9 @@
 
 /* ── Cookie consent banner ────────────────────────────────────────────────── */
 .cookie-banner { position:fixed;bottom:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:center;gap:1.5rem;padding:1rem 2rem;background:rgba(10,14,23,0.96);border-top:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(12px); }
+.cookie-banner[hidden] { display:none !important; }
 .cookie-banner p { color:#94a3b8;font-size:0.8125rem;margin:0; }
 .cookie-banner a { color:#D4A843; }
-.cookie-actions { display:flex;gap:0.5rem; }
+.cookie-actions { display:flex;gap:0.5rem;flex-shrink:0; }
+.cookie-actions .btn-primary,
+.cookie-actions .btn-ghost { pointer-events:auto;position:relative;z-index:10000; }

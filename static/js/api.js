@@ -22,19 +22,30 @@ class PaperSearch {
   }
 
   async _search(query) {
-    this.results.innerHTML = '<div class="search-result"><div class="result-title">Searching…</div></div>';
+    this.results.innerHTML = '<div class="search-result"><div class="result-title">Searching… <span style="color:var(--text-muted);font-size:0.8em">(may take a few seconds)</span></div></div>';
     this.results.classList.remove('hidden');
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
       const resp = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query }),
+        signal: controller.signal
       });
+      clearTimeout(timeout);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.message || `Server error (${resp.status})`);
+      }
       const data = await resp.json();
       this._renderResults(data.results || []);
     } catch (e) {
-      this.results.innerHTML = '<div class="search-result"><div class="result-title" style="color:var(--danger)">Search failed. Please try again.</div></div>';
+      const msg = e.name === 'AbortError'
+        ? 'Search timed out. The server may be busy — try again in a moment.'
+        : `Search failed: ${e.message || 'Please try again.'}`;
+      this.results.innerHTML = `<div class="search-result"><div class="result-title" style="color:var(--danger)">${this._esc(msg)}</div></div>`;
     }
   }
 

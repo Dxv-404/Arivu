@@ -309,7 +309,7 @@ footer { text-align: center; padding: 2rem; color: var(--text-muted); font-size:
 .explore-header nav { display: flex; gap: 24px; }
 .explore-header nav a { color: var(--text-secondary); font-size: 0.9rem; }
 .explore-header nav a[aria-current="page"] { color: var(--accent-gold); }
-.explore-main { max-width: 1100px; margin: 48px auto; padding: 0 24px; }
+.explore-main { max-width: 1100px; margin: 48px auto; padding: 0 24px 80px; }
 .explore-main h1 { margin-bottom: 8px; }
 .explore-sub { color: var(--text-muted); margin-bottom: 40px; }
 
