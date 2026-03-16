@@ -9,7 +9,7 @@ Implemented in Phase 3.
 """
 import logging
 
-from backend.db import fetchall, execute
+from backend.db import fetchall, fetchone, execute
 from backend.llm_client import get_llm_client
 from backend.prompt_sanitizer import prompt_sanitizer
 
@@ -75,7 +75,8 @@ class ChatGuide:
         llm = get_llm_client()
         if llm.available:
             response_text = self._llm_respond(llm, message, graph_summary,
-                                               current_view, history)
+                                               current_view, history,
+                                               session_id=session_id)
         else:
             response_text = self._fallback_respond(current_view)
 
@@ -93,12 +94,15 @@ class ChatGuide:
         }
 
     def _llm_respond(self, llm, message: str, graph_summary: dict,
-                     current_view: str, history: list) -> str:
+                     current_view: str, history: list,
+                     session_id: str = None) -> str:
         """Generate LLM response with graph context."""
+        persona_framing = _get_persona_framing(session_id) if session_id else ""
         system_prompt = (
             "You are Arivu's AI research guide. You help researchers understand "
             "the intellectual ancestry of academic papers. You have access to a "
             "knowledge graph showing how ideas flowed between papers.\n\n"
+            f"{persona_framing}\n\n"
             f"Current view: {current_view}\n"
             f"Graph summary: {_compact_summary(graph_summary)}\n\n"
             "Be concise, specific, and reference actual papers in the graph. "
@@ -166,6 +170,43 @@ class ChatGuide:
             ],
         }
         return suggestions_map.get(current_view, suggestions_map["graph"])[:3]
+
+
+def _get_persona_framing(session_id: str) -> str:
+    """
+    Get persona-specific framing instructions for the AI guide.
+    PersonaEngine was built in Phase 7 — this wires it into chat responses.
+    """
+    if not session_id:
+        return ""
+    try:
+        row = fetchone(
+            "SELECT persona FROM sessions WHERE session_id = %s",
+            (session_id,),
+        )
+        persona = row["persona"] if row else "explorer"
+    except Exception:
+        persona = "explorer"
+
+    PERSONA_FRAMING = {
+        "explorer": (
+            "Frame your guidance around discovery. Highlight surprising connections, "
+            "white space, and intersections the user might not have noticed."
+        ),
+        "strategist": (
+            "Focus on impact, risk, and resource allocation. Help them identify bottlenecks "
+            "and which papers are critical to the field's survival."
+        ),
+        "builder": (
+            "Emphasize methods, reproducibility, and practical next steps. "
+            "Help them see how they can extend or combine existing techniques."
+        ),
+        "skeptic": (
+            "Highlight contradictions, alternative explanations, and evidence quality. "
+            "Push back gently; encourage them to test assumptions."
+        ),
+    }
+    return PERSONA_FRAMING.get(persona, PERSONA_FRAMING["explorer"])
 
 
 def _compact_summary(graph_summary: dict) -> str:

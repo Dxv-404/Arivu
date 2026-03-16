@@ -768,3 +768,111 @@ class LinguisticMarkerDetector:
 
 # Singleton for use by graph_engine
 linguistic_marker_detector = LinguisticMarkerDetector()
+
+
+# ─── CITATION INTENT CLASSIFICATION (F1.11 — Phase 8) ────────────────────────
+
+CITATION_INTENT_CATEGORIES = (
+    "methodological_adoption",   # Paper adopts this paper's method
+    "theoretical_foundation",    # Paper uses as theoretical basis
+    "empirical_baseline",        # Paper uses as comparison baseline
+    "conceptual_inspiration",    # Paper inspired by but diverges
+    "direct_contradiction",      # Paper explicitly challenges
+    "incidental_mention",        # Passing reference, not central
+    "negative_citation",         # Cited as example of what NOT to do
+    "revival",                   # Resurrects forgotten work
+)
+
+INTENT_LINGUISTIC_MARKERS = {
+    "direct_contradiction": [
+        "contrary to", "in contrast to", "unlike", "challenge", "refute",
+        "disprove", "however", "argue against", "fail to",
+    ],
+    "methodological_adoption": [
+        "following", "adopt", "implement", "we use", "as in", "similar to",
+        "based on", "building on", "extending",
+    ],
+    "empirical_baseline": [
+        "baseline", "benchmark", "compare", "outperform", "compared to",
+        "relative to", "versus",
+    ],
+    "incidental_mention": [
+        "e.g.", "for example", "such as", "among others", "see also",
+    ],
+    "revival": [
+        "revisit", "rediscover", "renewed interest", "overlooked", "forgotten",
+        "original work by",
+    ],
+}
+
+
+class CitationIntentClassifier:
+    """
+    Classifies WHY a paper cites another paper.
+    Called from InheritanceDetector for each edge.
+    Results stored in edge_analysis.citation_intent.
+
+    Strategy:
+      1. Try linguistic marker detection on citing_sentence (fast, no LLM)
+      2. Fall back to mutation_type mapping
+      3. LLM classification as last resort
+    """
+
+    def classify(
+        self,
+        citing_sentence: str,
+        citing_abstract: str,
+        cited_title: str,
+        mutation_type: str,
+    ) -> str:
+        """Return one of CITATION_INTENT_CATEGORIES."""
+        # Fast path: linguistic markers
+        intent = self._detect_markers(citing_sentence or "")
+        if intent:
+            return intent
+
+        # Map from already-classified mutation_type to a likely intent
+        intent = self._from_mutation_type(mutation_type)
+        if intent:
+            return intent
+
+        # LLM fallback
+        return self._llm_classify(citing_sentence, citing_abstract, cited_title)
+
+    def _detect_markers(self, sentence: str) -> str:
+        lower = sentence.lower()
+        for intent, markers in INTENT_LINGUISTIC_MARKERS.items():
+            if any(m in lower for m in markers):
+                return intent
+        return ""
+
+    def _from_mutation_type(self, mutation_type: str) -> str:
+        mapping = {
+            "adoption":       "methodological_adoption",
+            "contradiction":  "direct_contradiction",
+            "revival":        "revival",
+            "incidental":     "incidental_mention",
+        }
+        return mapping.get(mutation_type, "")
+
+    def _llm_classify(self, sentence: str, abstract: str, cited_title: str) -> str:
+        try:
+            from backend.llm_client import get_llm_client
+            llm    = get_llm_client()
+            prompt = (
+                f"Classify WHY this paper cites '{cited_title}'.\n"
+                f"Citing sentence: {(sentence or abstract or '')[:500]}\n\n"
+                f"Choose exactly one: {', '.join(CITATION_INTENT_CATEGORIES)}\n"
+                f"Reply with only the category name, nothing else."
+            )
+            result = llm.generate_chat_response(
+                system_prompt="You classify citation intent. Reply with ONLY the category name.",
+                user_prompt=prompt,
+            )
+            if result:
+                cleaned = result.strip().lower().replace(" ", "_")
+                if cleaned in CITATION_INTENT_CATEGORIES:
+                    return cleaned
+        except Exception:
+            pass
+        return "methodological_adoption"  # safe default

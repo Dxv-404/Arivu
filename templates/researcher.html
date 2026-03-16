@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Researcher Profile — Arivu{% endblock %}
+
+{% block content %}
+<div class="researcher-page">
+  {% if not_found %}
+  <div class="researcher-header">
+    <h1>Researcher Not Found</h1>
+    <p style="color:var(--text-secondary)">
+      This researcher profile hasn't been computed yet.
+      <a href="/tool" style="color:var(--accent-gold)">Build a graph</a> containing their work first.
+    </p>
+  </div>
+  {% else %}
+  <div class="researcher-header" id="rp-header">
+    <h1 id="rp-name" style="color:var(--text-primary)">Loading...</h1>
+    <p id="rp-type" style="color:var(--text-secondary)"></p>
+  </div>
+  <div class="researcher-grid" id="rp-grid">
+    <div class="researcher-card" id="rp-contribution">
+      <h3>Contribution Profile</h3>
+      <canvas id="rp-chart" width="200" height="200"></canvas>
+    </div>
+    <div class="researcher-card" id="rp-heroes">
+      <h3>Intellectual Heroes</h3>
+      <div id="rp-heroes-list"></div>
+    </div>
+    <div class="researcher-card" id="rp-top">
+      <h3>Most Propagated Idea</h3>
+      <div id="rp-top-content"></div>
+    </div>
+    <div class="researcher-card" id="rp-credits">
+      <h3>Credit Distribution</h3>
+      <div id="rp-credits-bars"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script>
+  (async function() {
+    const authorId = {{ author_id | tojson }};
+    try {
+      const resp = await fetch(`/api/researcher/${authorId}`);
+      if (!resp.ok) throw new Error('Not found');
+      const d = await resp.json();
+
+      document.getElementById('rp-name').textContent = d.display_name || authorId;
+      document.getElementById('rp-type').textContent =
+        d.contribution_type ? `Primary role: ${d.contribution_type}` : '';
+
+      // Contribution doughnut chart
+      const ct = d.contribution_types || {};
+      const labels = Object.keys(ct);
+      const values = Object.values(ct);
+      if (labels.length) {
+        const colors = ['#D4A843','#3B82F6','#06B6D4','#22C55E','#9333EA','#EF4444','#F59E0B'];
+        new Chart(document.getElementById('rp-chart'), {
+          type: 'doughnut',
+          data: { labels, datasets: [{ data: values, backgroundColor: colors.slice(0, labels.length) }] },
+          options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#94A3B8' } } } }
+        });
+      }
+
+      // Intellectual heroes
+      const heroEl = document.getElementById('rp-heroes-list');
+      (d.intellectual_heroes || []).forEach(h => {
+        heroEl.innerHTML += `<div class="hero-item"><span class="hero-title">${h.title || ''}</span><span class="hero-count">${h.citation_count || 0}</span></div>`;
+      });
+      if (!d.intellectual_heroes?.length) heroEl.textContent = 'No heroes identified yet.';
+
+      // Top paper placeholder
+      document.getElementById('rp-top-content').innerHTML =
+        `<p style="color:var(--text-secondary)">${d.paper_count || 0} papers in current graph</p>`;
+
+      // Credit distribution bars
+      const cred = d.contribution_types || {};
+      const total = Object.values(cred).reduce((a,b) => a+b, 0) || 1;
+      const barsEl = document.getElementById('rp-credits-bars');
+      Object.entries(cred).forEach(([k,v]) => {
+        const pct = Math.round(v/total*100);
+        barsEl.innerHTML += `<div class="credit-bar-row"><span class="credit-label">${k}</span><div class="credit-bar-track"><div class="credit-bar-fill" style="width:${pct}%"></div></div><span class="credit-pct">${pct}%</span></div>`;
+      });
+    } catch (e) {
+      document.getElementById('rp-header').innerHTML = '<h1>Error loading profile</h1><p style="color:var(--text-muted)">Try building a graph first.</p>';
+    }
+  })();
+  </script>
+  {% endif %}
+</div>
+{% endblock %}

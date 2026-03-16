@@ -184,6 +184,27 @@ class ArivuRateLimiter:
         "API GET /papers/search":               (200, 3600),
         "API GET /fields/{name}/fingerprint":   (50,  3600),
         "API POST /v1/subscriptions":           (20,  3600),
+        # Phase 8 — intelligence + live mode + graph memory
+        "GET /api/cross-domain-sparks":         (5,   60),
+        "GET /api/error-propagation":           (10,  60),
+        "GET /api/reading-between-lines":       (5,   60),
+        "GET /api/intellectual-debt":           (3,   60),
+        "GET /api/challenge":                   (5,   60),
+        "GET /api/credits":                     (10,  60),
+        "GET /api/researcher":                  (20,  60),
+        "POST /api/literature-review":          (3,   3600),
+        "POST /api/field-entry-kit":            (5,   3600),
+        "POST /api/research-risk":              (10,  60),
+        "GET /api/journalism":                  (30,  60),
+        "GET /api/translation":                 (5,   60),
+        "GET /api/memory":                      (30,  60),
+        "POST /api/live/subscribe":             (10,  3600),
+        "GET /api/live/alerts":                 (60,  60),
+        "GET /api/coverage-report":             (30,  60),
+        # Phase 8 — public API extensions
+        "API GET /researchers/{id}/profile":    (200, 3600),
+        "API POST /literature-review":          (10,  3600),
+        "API GET /papers/{id}/journalism":      (200, 3600),
     }
 
     def __init__(self):

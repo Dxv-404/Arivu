@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ paper.get('title', 'Paper') | truncate(60) }} — Plain Language | Arivu{% endblock %}
+
+{% block content %}
+<div style="max-width:720px;margin:40px auto;padding:0 20px;">
+  {% if paper and paper.get('paper_id') %}
+  <h1 id="j-title" style="color:var(--accent-gold);font-size:24px;">{{ paper.get('title', 'Unknown Paper') }}</h1>
+  <p style="color:var(--text-muted);font-size:14px;">{{ paper.get('year', '') }}</p>
+
+  <div id="j-loading" style="color:var(--text-secondary);margin:24px 0;">Analyzing paper...</div>
+
+  <div id="j-content" style="display:none;">
+    <section style="margin-bottom:24px;">
+      <h2 style="color:var(--text-primary);font-size:18px;">What this paper does</h2>
+      <p id="j-plain" style="color:var(--text-secondary);line-height:1.6;"></p>
+    </section>
+
+    <section style="margin-bottom:24px;">
+      <h2 style="color:var(--text-primary);font-size:18px;">The backstory</h2>
+      <p id="j-context" style="color:var(--text-secondary);line-height:1.6;"></p>
+    </section>
+
+    <section style="margin-bottom:24px;">
+      <h2 style="color:var(--text-primary);font-size:18px;">Hype check</h2>
+      <div id="j-hype" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+        <div id="j-hype-meter" style="width:120px;height:8px;background:var(--bg-elevated);border-radius:4px;overflow:hidden;">
+          <div id="j-hype-fill" style="height:100%;border-radius:4px;transition:width 0.5s;"></div>
+        </div>
+        <span id="j-hype-verdict" style="font-weight:600;text-transform:capitalize;"></span>
+      </div>
+      <p id="j-hype-reasoning" style="color:var(--text-muted);font-size:13px;"></p>
+    </section>
+
+    <section style="margin-bottom:24px;">
+      <h2 style="color:var(--text-primary);font-size:18px;">Why it matters</h2>
+      <p id="j-stakes" style="color:var(--text-secondary);line-height:1.6;"></p>
+    </section>
+
+    <div style="margin-top:32px;padding-top:16px;border-top:1px solid var(--bg-elevated);">
+      <a href="/tool" style="color:var(--accent-gold);">Explore the full research graph &rarr;</a>
+    </div>
+  </div>
+
+  <script>
+  (async function() {
+    const paperId = {{ paper.get('paper_id', '') | tojson }};
+    try {
+      const resp = await fetch(`/api/journalism/${paperId}`);
+      if (!resp.ok) throw new Error('API error');
+      const d = await resp.json();
+
+      document.getElementById('j-plain').textContent = d.plain_language || 'Analysis unavailable.';
+      document.getElementById('j-context').textContent = d.context_story || '';
+      document.getElementById('j-stakes').textContent = d.stakes_if_true || '';
+
+      const hype = d.hype_detector || {};
+      const score = parseFloat(hype.hype_score || 0.5);
+      const fill = document.getElementById('j-hype-fill');
+      fill.style.width = (score * 100) + '%';
+      fill.style.background = score > 0.7 ? 'var(--danger)' : score > 0.4 ? 'var(--warning)' : 'var(--success)';
+      document.getElementById('j-hype-verdict').textContent = hype.hype_verdict || '';
+      document.getElementById('j-hype-reasoning').textContent = hype.hype_reasoning || '';
+
+      document.getElementById('j-loading').style.display = 'none';
+      document.getElementById('j-content').style.display = 'block';
+    } catch (e) {
+      document.getElementById('j-loading').textContent = 'Could not load analysis. Try again later.';
+    }
+  })();
+  </script>
+  {% else %}
+  <h1 style="color:var(--text-primary);">Paper Not Found</h1>
+  <p style="color:var(--text-secondary);">
+    This paper isn't in our database yet.
+    <a href="/" style="color:var(--accent-gold);">Search for a paper</a> to get started.
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

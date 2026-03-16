@@ -110,6 +110,10 @@ class Config:
     API_BASE_URL           = os.environ.get("API_BASE_URL", "https://arivu.app")
     MAX_UPLOAD_MB          = int(os.environ.get("MAX_UPLOAD_MB", "10"))
 
+    # ── Phase 8 — Retraction Watch, PubPeer, Live Mode ─────────
+    RETRACTION_WATCH_CSV_URL = os.environ.get("RETRACTION_WATCH_CSV_URL", "")
+    LIVE_MODE_ENABLED        = os.environ.get("LIVE_MODE_ENABLED", "false").lower() == "true"
+
     # ── Derived properties ────────────────────────────────────────
     @classmethod
     def R2_ENABLED(cls) -> bool:
@@ -156,6 +160,9 @@ class Config:
 
         if not cls.WEBHOOK_SIGNING_SECRET:
             logger.warning("Config: WEBHOOK_SIGNING_SECRET not set — webhook subscriptions will use random per-subscription secrets only")
+
+        if cls.LIVE_MODE_ENABLED and not cls.RETRACTION_WATCH_CSV_URL:
+            logger.warning("LIVE_MODE_ENABLED=true but RETRACTION_WATCH_CSV_URL not set — retraction sync will fail")
 
         if cls.ENABLE_AUTH:
             # STRIPE_SECRET_KEY warning removed — billing dormant (ADR-016).

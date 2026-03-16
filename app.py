@@ -61,6 +61,22 @@ from backend.lab_manager import LabManager
 from backend.secure_upload import SecureFileUploadHandler
 from backend.webhook_manager import WebhookManager
 
+# Phase 8 imports
+from backend.cross_domain_spark import CrossDomainSparkDetector
+from backend.error_propagation import ErrorPropagationTracker
+from backend.reading_between_lines import ReadingBetweenLines
+from backend.intellectual_debt import IntellectualDebtTracker
+from backend.challenge_generator import ChallengeGenerator
+from backend.idea_credit import IdeaCreditSystem
+from backend.researcher_profiles import ResearcherProfileBuilder
+from backend.literature_review_engine import LiteratureReviewEngine
+from backend.field_entry_kit import FieldEntryKit
+from backend.research_risk_analyzer import ResearchRiskAnalyzer
+from backend.science_journalism import ScienceJournalismLayer
+from backend.live_mode import LiveModeManager
+from backend.interdisciplinary_translation import InterdisciplinaryTranslator
+from backend.graph_memory import GraphMemoryManager
+
 logger = logging.getLogger(__name__)
 
 # Module-level Flask app — required for @app.route decorators and app.logger
@@ -844,29 +860,78 @@ def create_app():
         )
         return jsonify({"status": "ok"})
 
-    # ─── POST /api/flag-edge ─────────────────────────────────────────────
+    # ─── POST /api/flag-edge (Phase 8: auto-downgrade) ──────────────────
 
     @app.route("/api/flag-edge", methods=["POST"])
     @require_session
     def api_flag_edge():
-        """User flags an incorrect inheritance edge classification."""
-        session_id = g.session_id
-        data = request.get_json(silent=True) or {}
-        citing_id = data.get("citing_paper_id")
-        cited_id = data.get("cited_paper_id")
+        """
+        Flag an edge classification as incorrect.
+        Auto-downgrades confidence tier when 3+ DISTINCT users flag the same edge.
+        """
+        data          = request.get_json(silent=True) or {}
+        edge_id       = (data.get("edge_id") or "").strip()
+        reason        = (data.get("reason") or "")[:200]
+        feedback_type = data.get("feedback_type", "disagreement")
 
-        if not citing_id or not cited_id:
-            return jsonify({"error": "citing_paper_id and cited_paper_id required"}), 400
+        # Backward compat: accept citing_paper_id + cited_paper_id
+        if not edge_id:
+            citing_id = data.get("citing_paper_id")
+            cited_id  = data.get("cited_paper_id")
+            if citing_id and cited_id:
+                edge_id = f"{citing_id}:{cited_id}"
+        if not edge_id:
+            return jsonify({"error": "edge_id required"}), 400
 
-        edge_id = f"{citing_id}:{cited_id}"
+        user_id = g.get("user_id") or g.session_id
+
         db.execute(
-            """
-            INSERT INTO edge_feedback (edge_id, session_id, feedback_type, feedback_detail)
-            VALUES (%s, %s, 'incorrect_classification', %s)
-            """,
-            (edge_id, session_id, f"Flagged by user: {citing_id} → {cited_id}"),
+            "INSERT INTO edge_feedback (edge_id, session_id, feedback_type, feedback_detail) "
+            "VALUES (%s, %s, %s, %s)",
+            (edge_id, g.session_id, feedback_type, reason),
         )
-        return jsonify({"status": "flagged", "message": "Thank you for the feedback."})
+
+        # Auto-downgrade via confidence_overrides
+        current = db.fetchone(
+            "SELECT flag_count, flagged_by_users, original_tier FROM confidence_overrides WHERE edge_id=%s",
+            (edge_id,),
+        )
+        flag_count = 1
+        if current:
+            flagged_users = list(current.get("flagged_by_users") or [])
+            if user_id not in flagged_users:
+                flagged_users.append(user_id)
+            flag_count    = len(flagged_users)
+            review_needed = flag_count >= 5
+            new_tier      = _downgrade_tier(current.get("original_tier") or "medium", flag_count)
+            db.execute(
+                "UPDATE confidence_overrides SET flag_count=%s, flagged_by_users=%s, "
+                "override_tier=%s, review_required=%s, last_flagged_at=NOW() WHERE edge_id=%s",
+                (flag_count, flagged_users, new_tier, review_needed, edge_id),
+            )
+        else:
+            orig_row  = db.fetchone(
+                "SELECT base_confidence FROM edge_analysis WHERE edge_id=%s", (edge_id,),
+            )
+            from backend.models import get_confidence_tier
+            orig_tier = get_confidence_tier(float(orig_row["base_confidence"])) if orig_row else "MEDIUM"
+            db.execute(
+                "INSERT INTO confidence_overrides (edge_id, original_tier, override_tier, "
+                "flag_count, flagged_by_users) VALUES (%s, %s, %s, 1, %s) ON CONFLICT (edge_id) DO NOTHING",
+                (edge_id, orig_tier.lower(), orig_tier.lower(), [user_id]),
+            )
+
+        db.execute(
+            "UPDATE edge_analysis SET flagged_by_users = flagged_by_users + 1 WHERE edge_id=%s",
+            (edge_id,),
+        )
+
+        if g.get("user_id"):
+            graph_id = data.get("graph_id", "")
+            if graph_id:
+                GraphMemoryManager().mark_edge_flagged(g.user_id, graph_id, edge_id)
+
+        return jsonify({"success": True, "total_flags": flag_count})
 
     # ─── GET /api/quality ────────────────────────────────────────────────
 
@@ -2228,8 +2293,478 @@ def create_app():
         )
         return "Email updated successfully. You can close this page."
 
-    app.logger.info("Arivu Phase 7 app ready")
+    # ══════════════════════════════════════════════════════════════════════
+    # Phase 8 routes
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── Cross-Domain Spark Detector ───────────────────────────────────────
+    @app.route("/api/cross-domain-sparks/<seed_paper_id>")
+    @require_auth
+    def api_cross_domain_sparks(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        graph_id = graph_data.get("metadata", {}).get("graph_id", "")
+        if graph_id:
+            cached = db.fetchone(
+                "SELECT result_json FROM cross_domain_spark_cache WHERE graph_id=%s",
+                (graph_id,),
+            )
+            if cached:
+                return jsonify(cached["result_json"])
+
+        result = CrossDomainSparkDetector().detect(graph_data)
+        if graph_id:
+            db.execute(
+                "INSERT INTO cross_domain_spark_cache (graph_id, result_json) VALUES (%s,%s::jsonb) "
+                "ON CONFLICT (graph_id) DO UPDATE SET result_json=EXCLUDED.result_json, computed_at=NOW()",
+                (graph_id, json.dumps(result)),
+            )
+        log_action(session_id, "cross_domain_sparks", {"seed_paper_id": seed_paper_id, "graph_id": graph_id})
+        return jsonify(result)
+
+    # ── Error Propagation Tracker ─────────────────────────────────────────
+    @app.route("/api/error-propagation/<seed_paper_id>")
+    @require_auth
+    def api_error_propagation(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = ErrorPropagationTracker().analyze(graph_data)
+        log_action(session_id, "error_propagation", {"seed_paper_id": seed_paper_id})
+        return jsonify(result)
+
+    # ── Reading Between the Lines ─────────────────────────────────────────
+    @app.route("/api/reading-between-lines/<paper_id>")
+    @require_auth
+    def api_reading_between_lines(paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = ReadingBetweenLines().analyze(graph_data, paper_id)
+        log_action(session_id, "reading_between_lines", {"paper_id": paper_id})
+        return jsonify(result.to_dict())
+
+    # ── Intellectual Debt Tracker ─────────────────────────────────────────
+    @app.route("/api/intellectual-debt/<seed_paper_id>")
+    @require_auth
+    def api_intellectual_debt(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = IntellectualDebtTracker().analyze(graph_data)
+        log_action(session_id, "intellectual_debt", {"seed_paper_id": seed_paper_id})
+        return jsonify(result)
+
+    # ── Challenge Generator ───────────────────────────────────────────────
+    @app.route("/api/challenge/<paper_id>")
+    @require_auth
+    def api_challenge_generator(paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        result = ChallengeGenerator().generate(graph_data, paper_id)
+        log_action(session_id, "challenge_generator", {"paper_id": paper_id})
+        return jsonify(result)
+
+    # ── Idea Credit System ────────────────────────────────────────────────
+    @app.route("/api/credits/<seed_paper_id>")
+    @require_auth
+    def api_idea_credits(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        profiles = IdeaCreditSystem().compute_graph_credits(graph_data)
+        return jsonify({"credit_profiles": profiles, "total": len(profiles)})
+
+    # ── Researcher Profiles ───────────────────────────────────────────────
+    @app.route("/api/researcher/<author_id>")
+    @require_auth
+    def api_researcher_profile(author_id: str):
+        cached = db.fetchone(
+            "SELECT profile_json FROM researcher_profiles WHERE author_id=%s "
+            "AND computed_at > NOW() - INTERVAL '30 days'",
+            (author_id,),
+        )
+        if cached and cached.get("profile_json"):
+            return jsonify(cached["profile_json"])
+
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        profile = ResearcherProfileBuilder().build_for_author(author_id, graph_data)
+        if not profile or profile.get("error"):
+            return jsonify({"error": "Researcher not found in current graph"}), 404
+
+        db.execute(
+            "INSERT INTO researcher_profiles (author_id, display_name, profile_json) "
+            "VALUES (%s, %s, %s::jsonb) "
+            "ON CONFLICT (author_id) DO UPDATE SET profile_json=EXCLUDED.profile_json, "
+            "display_name=EXCLUDED.display_name, computed_at=NOW()",
+            (author_id, profile.get("display_name", ""), json.dumps(profile)),
+        )
+        return jsonify(profile)
+
+    # ── Literature Review Engine ──────────────────────────────────────────
+    @app.route("/api/literature-review", methods=["POST"])
+    @require_auth
+    def api_literature_review():
+        data              = request.get_json(silent=True) or {}
+        research_question = (data.get("research_question") or "").strip()
+        if not research_question:
+            return jsonify({"error": "research_question required"}), 400
+        if len(research_question) > 500:
+            return jsonify({"error": "research_question too long (max 500 chars)"}), 400
+
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            graph_data = None
+
+        seed_ids = [n["id"] for n in (graph_data or {}).get("nodes", [])][:10]
+        row = db.execute_returning(
+            "INSERT INTO literature_review_jobs (user_id, research_question, seed_paper_ids, status) "
+            "VALUES (%s::uuid, %s, %s, 'processing') RETURNING job_id::text",
+            (g.user_id, research_question, seed_ids),
+        )
+        job_id = row["job_id"]
+
+        try:
+            engine = LiteratureReviewEngine()
+            result = engine.generate(research_question, g.user_id,
+                                     graph_json=graph_data, seed_paper_ids=seed_ids)
+            result_dict = result.to_dict()
+            db.execute(
+                "UPDATE literature_review_jobs SET status='done', result_json=%s::jsonb, "
+                "result_docx_r2=%s, completed_at=NOW() WHERE job_id=%s::uuid",
+                (json.dumps(result_dict), result.docx_r2_key, job_id),
+            )
+            log_action(session_id, "literature_review",
+                        {"job_id": job_id, "research_question": research_question[:100]})
+            return jsonify({"job_id": job_id, "result": result_dict})
+        except Exception as exc:
+            db.execute(
+                "UPDATE literature_review_jobs SET status='failed', error_message=%s WHERE job_id=%s::uuid",
+                (str(exc)[:500], job_id),
+            )
+            app.logger.error(f"Literature review failed: {exc}")
+            return jsonify({"error": "Literature review generation failed"}), 500
+
+    # ── Field Entry Kit ───────────────────────────────────────────────────
+    @app.route("/api/field-entry-kit", methods=["POST"])
+    @require_auth
+    def api_field_entry_kit():
+        data              = request.get_json(silent=True) or {}
+        research_question = (data.get("research_question") or "").strip()
+        if not research_question:
+            return jsonify({"error": "research_question required"}), 400
+
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        result = FieldEntryKit().generate(graph_data, research_question, g.user_id)
+        log_action(session_id, "field_entry_kit", {"research_question": research_question[:100]})
+        return jsonify(result)
+
+    # ── Research Risk Analyzer ────────────────────────────────────────────
+    @app.route("/api/research-risk", methods=["POST"])
+    @require_auth
+    def api_research_risk():
+        data               = request.get_json(silent=True) or {}
+        research_direction = (data.get("research_direction") or "").strip()
+        if not research_direction:
+            return jsonify({"error": "research_direction required"}), 400
+
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        result = ResearchRiskAnalyzer().analyze(graph_data, research_direction)
+        log_action(session_id, "research_risk", {"research_direction": research_direction[:100]})
+        return jsonify(result)
+
+    # ── Science Journalism Layer (public, no auth) ────────────────────────
+    @app.route("/api/journalism/<paper_id>")
+    @require_session
+    def api_journalism(paper_id: str):
+        session_id = g.session_id
+        try:
+            graph_data = _get_latest_graph_json(session_id, None)
+        except RuntimeError:
+            graph_data = None
+
+        if not graph_data:
+            row = db.fetchone(
+                "SELECT graph_json_url FROM graphs WHERE seed_paper_id=%s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (paper_id,),
+            )
+            if row:
+                try:
+                    from backend.r2_client import R2Client
+                    graph_data = R2Client().download_json(row["graph_json_url"])
+                except Exception:
+                    pass
+
+        if not graph_data:
+            return jsonify({"error": "No graph available for this paper."}), 404
+
+        result = ScienceJournalismLayer().analyze(graph_data, paper_id)
+        return jsonify(result.to_dict())
+
+    # ── Interdisciplinary Translation ─────────────────────────────────────
+    @app.route("/api/translation/<seed_paper_id>")
+    @require_auth
+    def api_interdisciplinary_translation(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.user_id)
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+        return jsonify(InterdisciplinaryTranslator().translate(graph_data))
+
+    # ── Coverage Report (F7.4) ────────────────────────────────────────────
+    @app.route("/api/coverage-report/<seed_paper_id>")
+    @require_session
+    def api_coverage_report(seed_paper_id: str):
+        session_id = session_manager.get_session_id(request)
+        try:
+            graph_data = _get_latest_graph_json(session_id, g.get("user_id"))
+        except RuntimeError:
+            return jsonify({"error": "Could not load graph"}), 500
+        if not graph_data:
+            return jsonify({"error": "No graph built yet."}), 404
+
+        metadata = graph_data.get("metadata", {})
+        nodes    = graph_data.get("nodes", [])
+        total    = len(nodes)
+        with_abstract  = sum(1 for n in nodes if n.get("abstract"))
+        coverage_score = metadata.get("coverage_score", with_abstract / max(total, 1))
+
+        return jsonify({
+            "total_papers":      total,
+            "abstract_coverage": {
+                "count": with_abstract, "total": total,
+                "pct":   round(with_abstract / max(total, 1) * 100, 1),
+            },
+            "coverage_score":    round(coverage_score, 3),
+            "reliability_label": (
+                "HIGH" if coverage_score >= 0.80 else
+                "MEDIUM" if coverage_score >= 0.55 else "LOW"
+            ),
+        })
+
+    # ── Graph Memory routes ───────────────────────────────────────────────
+    @app.route("/api/memory/<graph_id>")
+    @require_auth
+    def api_get_memory(graph_id: str):
+        return jsonify(GraphMemoryManager().get_memory(g.user_id, graph_id))
+
+    @app.route("/api/memory/<graph_id>/seen", methods=["POST"])
+    @require_auth
+    def api_mark_seen(graph_id: str):
+        data      = request.get_json(silent=True) or {}
+        paper_ids = data.get("paper_ids", [])
+        if paper_ids:
+            GraphMemoryManager().mark_papers_seen(g.user_id, graph_id, paper_ids)
+        return jsonify({"success": True})
+
+    @app.route("/api/memory/<graph_id>/edge-expand", methods=["POST"])
+    @require_auth
+    def api_expand_edge(graph_id: str):
+        data    = request.get_json(silent=True) or {}
+        edge_id = data.get("edge_id", "")
+        if edge_id:
+            GraphMemoryManager().record_edge_expansion(g.user_id, graph_id, edge_id)
+        return jsonify({"success": True})
+
+    @app.route("/api/memory/<graph_id>/time-machine", methods=["POST"])
+    @require_auth
+    def api_update_time_machine(graph_id: str):
+        data = request.get_json(silent=True) or {}
+        year = data.get("year")
+        if year and isinstance(year, int):
+            GraphMemoryManager().update_time_machine_position(g.user_id, graph_id, year)
+        return jsonify({"success": True})
+
+    @app.route("/api/memory/<graph_id>/pruning", methods=["POST"])
+    @require_auth
+    def api_record_pruning(graph_id: str):
+        data           = request.get_json(silent=True) or {}
+        pruned_ids     = data.get("pruned_ids", [])
+        result_summary = data.get("result_summary", {})
+        if pruned_ids:
+            GraphMemoryManager().record_pruning(g.user_id, graph_id, pruned_ids, result_summary)
+        return jsonify({"success": True})
+
+    @app.route("/api/memory/<graph_id>/navigation", methods=["POST"])
+    @require_auth
+    def api_update_navigation(graph_id: str):
+        data     = request.get_json(silent=True) or {}
+        paper_id = data.get("paper_id", "")
+        if paper_id:
+            GraphMemoryManager().update_navigation(g.user_id, graph_id, paper_id)
+        return jsonify({"success": True})
+
+    # ── Live Mode routes ──────────────────────────────────────────────────
+    @app.route("/api/live/subscribe", methods=["POST"])
+    @require_auth
+    def api_live_subscribe():
+        data          = request.get_json(silent=True) or {}
+        graph_id      = data.get("graph_id", "")
+        seed_paper_id = data.get("seed_paper_id", "")
+        alert_events  = data.get("alert_events",
+                                  ["new_citation", "paradigm_shift", "gap_filled", "retraction_alert"])
+        digest_email  = data.get("digest_email", True)
+        if not graph_id or not seed_paper_id:
+            return jsonify({"error": "graph_id and seed_paper_id required"}), 400
+        sub_id = LiveModeManager().create_subscription(
+            g.user_id, graph_id, seed_paper_id, alert_events, digest_email
+        )
+        return jsonify({"subscription_id": sub_id, "active": True})
+
+    @app.route("/api/live/subscriptions")
+    @require_auth
+    def api_live_subscriptions():
+        return jsonify({"subscriptions": LiveModeManager().get_subscriptions(g.user_id)})
+
+    @app.route("/api/live/cancel", methods=["POST"])
+    @require_auth
+    def api_live_cancel():
+        data     = request.get_json(silent=True) or {}
+        graph_id = data.get("graph_id", "")
+        success  = LiveModeManager().cancel_subscription(g.user_id, graph_id)
+        if not success:
+            return jsonify({"error": "No active subscription found for this graph."}), 404
+        return jsonify({"success": True})
+
+    @app.route("/api/live/alerts")
+    @require_auth
+    def api_live_alerts():
+        alerts = LiveModeManager().get_unread_alerts(g.user_id)
+        return jsonify({"alerts": alerts, "count": len(alerts)})
+
+    @app.route("/api/live/alerts/read", methods=["POST"])
+    @require_auth
+    def api_live_alerts_read():
+        data      = request.get_json(silent=True) or {}
+        alert_ids = data.get("alert_ids", [])
+        n = LiveModeManager().mark_alerts_read(g.user_id, alert_ids)
+        return jsonify({"marked": n})
+
+    # ── Disagreement Flag — Insight ───────────────────────────────────────
+    @app.route("/api/flag-insight", methods=["POST"])
+    @require_session
+    def api_flag_insight():
+        data       = request.get_json(silent=True) or {}
+        insight_id = data.get("insight_id", "")
+        if not insight_id:
+            return jsonify({"error": "insight_id required"}), 400
+
+        user_id = g.get("user_id")
+        try:
+            db.execute(
+                "INSERT INTO insight_feedback (insight_id, session_id, user_id, feedback) "
+                "VALUES (%s, %s, %s, 'not_helpful') ON CONFLICT DO NOTHING",
+                (insight_id, g.session_id, user_id),
+            )
+        except Exception:
+            pass
+
+        count_row = db.fetchone(
+            "SELECT COUNT(*) AS n FROM insight_feedback WHERE insight_id=%s AND feedback='not_helpful'",
+            (insight_id,),
+        )
+        flag_count = int(count_row["n"]) if count_row else 0
+        return jsonify({"success": True, "total_flags": flag_count, "auto_downgraded": flag_count >= 3})
+
+    # ── Researcher Profile Page ───────────────────────────────────────────
+    @app.route("/researcher/<author_id>")
+    def researcher_page(author_id: str):
+        exists = db.fetchone(
+            "SELECT author_id FROM researcher_profiles WHERE author_id=%s", (author_id,)
+        )
+        return render_template("researcher.html", author_id=author_id,
+                               not_found=not exists)
+
+    # ── Science Journalism Page (public) ──────────────────────────────────
+    @app.route("/explain/<paper_id>")
+    def journalism_page(paper_id: str):
+        paper = db.fetchone(
+            "SELECT paper_id, title, year, abstract FROM papers WHERE paper_id=%s",
+            (paper_id,),
+        )
+        return render_template("journalism.html", paper=dict(paper) if paper else {})
+
+    app.logger.info("Arivu Phase 8 app ready")
     return app
+
+
+def _downgrade_tier(original_tier: str, flag_count: int) -> str:
+    """Auto-downgrade confidence tier when multiple distinct users flag."""
+    tier_order = ["high", "medium", "low", "speculative"]
+    if flag_count < 3:
+        return original_tier
+    idx = tier_order.index(original_tier) if original_tier in tier_order else 1
+    new_idx = min(idx + 1, len(tier_order) - 1)
+    return tier_order[new_idx]
+
+
+def _coverage_gate(score: float) -> dict:
+    """Determine which features are reliable given the coverage score."""
+    return {
+        "cross_domain_spark":    True,   # works at any coverage
+        "error_propagation":     True,
+        "reading_between_lines": score >= 0.40,
+        "challenge_generator":   score >= 0.50,
+        "idea_credits":          score >= 0.55,
+        "researcher_profiles":   score >= 0.55,
+        "intellectual_debt":     score >= 0.70,
+        "field_entry_kit":       score >= 0.70,
+        "literature_review":     score >= 0.80,
+    }
 
 
 def _build_discovery_pathway(relationship: str, context: str) -> dict:

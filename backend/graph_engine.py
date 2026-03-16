@@ -454,6 +454,25 @@ class AncestryGraph:
         except Exception as exc:
             logger.warning(f"leaderboard computation failed: {exc}")
 
+        # Phase 8: seed researcher_profiles with author stubs
+        try:
+            for paper_id, paper in self.nodes.items():
+                for author_name in (getattr(paper, "authors", []) or []):
+                    if not author_name or not author_name.strip():
+                        continue
+                    # Use name-based hash as surrogate author_id until full profile build
+                    author_id = hashlib.sha256(author_name.strip().lower().encode()).hexdigest()[:32]
+                    db.execute(
+                        """
+                        INSERT INTO researcher_profiles (author_id, display_name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (author_id) DO NOTHING
+                        """,
+                        (author_id, author_name.strip()),
+                    )
+        except Exception as exc:
+            logger.warning(f"researcher_profiles seeding failed: {exc}")
+
         # 3 + 4. DNA profile + diversity score (best-effort)
         try:
             from backend.dna_profiler import DNAProfiler

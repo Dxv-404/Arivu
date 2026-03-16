@@ -43,6 +43,13 @@ def _send(to: str, subject: str, text: str, html: str) -> bool:
         return False
 
 
+def send_email(to: str, subject: str, text: str, html: str = "") -> bool:
+    """Public wrapper for _send(). Used by live_monitor_cron.py and other Phase 8+ callers."""
+    if not html:
+        html = f"<pre style='font-family:sans-serif'>{text}</pre>"
+    return _send(to, subject, text, html)
+
+
 def send_verification_email(email: str, display_name: str, token: str) -> bool:
     name = display_name or "there"
     link = f"https://{Config.CUSTOM_DOMAIN}/verify-email?token={token}"

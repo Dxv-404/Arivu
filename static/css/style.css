@@ -433,3 +433,90 @@ footer { text-align: center; padding: 2rem; color: var(--text-muted); font-size:
   color: var(--text-secondary);
   min-height: 1.4em;
 }
+
+/* ── Phase 8: Confidence Layer (F7.1 + F7.2) ────────────────────────── */
+.confidence-badge { display:inline-flex; align-items:center; gap:2px; margin-left:6px; }
+.conf-dots { display:inline-flex; gap:2px; }
+.conf-expand-btn {
+  background:none; border:1px solid var(--text-muted); color:var(--text-secondary);
+  font-size:10px; padding:1px 6px; border-radius:3px; cursor:pointer; margin-left:6px;
+}
+.conf-expand-btn:hover { border-color:var(--accent-gold); color:var(--accent-gold); }
+.evidence-trail {
+  margin-top:8px; padding:8px 12px; background:var(--bg-elevated); border-radius:6px;
+  font-size:12px; color:var(--text-secondary); border-left:3px solid var(--accent-teal);
+}
+.et-explanation { margin-bottom:4px; }
+.et-signals { font-size:11px; color:var(--text-muted); }
+.et-scores { font-size:11px; color:var(--text-muted); margin-top:2px; }
+.et-quote {
+  margin:6px 0 0; padding:4px 8px; border-left:2px solid var(--text-muted);
+  font-style:italic; font-size:11px;
+}
+
+/* ── Phase 8: Seen-paper visual state (F5.5) ─────────────────────────── */
+.node-seen circle { opacity:0.45; filter:grayscale(60%); }
+
+/* ── Phase 8: Fault-line edge styling (F1.15) ────────────────────────── */
+.fault-line-edge { stroke-linecap:round; transition:stroke-width 0.3s, opacity 0.3s; }
+.fault-line-legend { display:flex; gap:8px; font-size:11px; color:var(--text-secondary); align-items:center; }
+.fault-dot-high { width:8px; height:8px; border-radius:50%; background:#ef4444; display:inline-block; }
+.fault-dot-medium { width:8px; height:8px; border-radius:50%; background:#f97316; display:inline-block; }
+.fault-dot-low { width:8px; height:8px; border-radius:50%; background:#f59e0b; display:inline-block; }
+
+/* ── Phase 8: Disagreement flag buttons (F7.3) ───────────────────────── */
+.flag-btn, .insight-flag-btn {
+  background:none; border:none; cursor:pointer; font-size:14px;
+  opacity:0.5; transition:opacity 0.2s;
+}
+.flag-btn:hover, .insight-flag-btn:hover { opacity:1; color:#ef4444; }
+.flag-btn:disabled, .insight-flag-btn:disabled { opacity:0.3; cursor:default; }
+.flag-threshold-warn {
+  font-size:10px; color:#ef4444; margin-left:4px; font-weight:600;
+}
+
+/* ── Phase 8: Live Mode panel ─────────────────────────────────────────── */
+.live-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.live-status { font-size:11px; color:var(--text-muted); }
+.live-active { color:var(--success); font-weight:600; }
+.live-alerts-list { max-height:300px; overflow-y:auto; }
+.live-alert {
+  display:flex; gap:8px; padding:8px; border-bottom:1px solid var(--bg-elevated);
+  align-items:flex-start;
+}
+.live-alert-icon { font-size:16px; }
+.live-alert-body { flex:1; font-size:12px; }
+.live-alert-body strong { display:block; text-transform:capitalize; }
+.live-alert-body small { color:var(--text-muted); }
+.live-no-alerts { text-align:center; color:var(--text-muted); padding:16px; font-size:12px; }
+
+/* ── Phase 8: Coverage Report panel (F7.4) ────────────────────────────── */
+.coverage-report { padding:12px; }
+.coverage-score-HIGH { color:var(--success); }
+.coverage-score-MEDIUM { color:var(--warning); }
+.coverage-score-LOW { color:var(--danger); }
+.coverage-bar { background:var(--bg-elevated); border-radius:4px; height:8px; margin:8px 0; overflow:hidden; }
+.coverage-bar-fill { height:100%; border-radius:4px; transition:width 0.5s; }
+.feature-gated { opacity:0.4; pointer-events:none; }
+
+/* ── Phase 8: Researcher profile page ─────────────────────────────────── */
+.researcher-page { max-width:900px; margin:40px auto; padding:0 20px; }
+.researcher-header { margin-bottom:24px; }
+.researcher-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:600px) { .researcher-grid { grid-template-columns:1fr; } }
+.researcher-card {
+  background:var(--bg-surface); border-radius:8px; padding:16px;
+  border:1px solid var(--bg-elevated);
+}
+.credit-bar-row { display:flex; align-items:center; gap:8px; margin:4px 0; }
+.credit-label { width:80px; font-size:11px; color:var(--text-secondary); text-align:right; }
+.credit-bar-track { flex:1; height:6px; background:var(--bg-elevated); border-radius:3px; overflow:hidden; }
+.credit-bar-fill { height:100%; background:var(--accent-gold); border-radius:3px; }
+.credit-pct { width:36px; font-size:11px; color:var(--text-muted); }
+.hero-item { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--bg-elevated); }
+.hero-title { font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hero-count { font-size:11px; color:var(--text-muted); margin-left:8px; }
+
+/* ── Phase 8: Author link in tooltips (GAP-P8-19) ────────────────────── */
+.author-link { color:#60a5fa; text-decoration:underline; cursor:pointer; }
+.author-link:hover { color:var(--accent-gold); }

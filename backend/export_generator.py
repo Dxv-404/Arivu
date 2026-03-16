@@ -395,3 +395,34 @@ class ExportGenerator:
         plt.savefig(buf, format="svg", bbox_inches="tight")
         plt.close(fig)
         return buf.getvalue().encode("utf-8"), "arivu_graph.svg", "image/svg+xml"
+
+    # ── Phase 8: DOCX generation ───────────────────────────────────────────────
+
+    def generate_docx(self, sections: list[dict], title: str = "Arivu Report") -> bytes:
+        """
+        Generate a Word document from structured sections.
+        Each section: {"heading": str, "body": str}
+        Returns raw .docx bytes.
+        Used by LiteratureReviewEngine and FieldEntryKit.
+        """
+        from docx import Document
+        from docx.shared import Pt, Inches
+
+        doc = Document()
+        style = doc.styles["Normal"]
+        style.font.name = "Calibri"
+        style.font.size = Pt(11)
+
+        doc.add_heading(title, level=0)
+
+        for section in sections:
+            if section.get("heading"):
+                doc.add_heading(section["heading"], level=1)
+            if section.get("body"):
+                for para_text in section["body"].split("\n\n"):
+                    if para_text.strip():
+                        doc.add_paragraph(para_text.strip())
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
