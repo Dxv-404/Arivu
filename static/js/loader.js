@@ -69,7 +69,10 @@ class GraphLoader {
   }
 
   _initGraph(graphData) {
-    document.getElementById('loading-overlay').hidden = true;
+    // Use classList (not .hidden attribute) — the CSS rule
+    // #loading-overlay { display:flex } has higher specificity than
+    // the UA [hidden] { display:none }, so .hidden = true won't work.
+    document.getElementById('loading-overlay').classList.add('hidden');
 
     const container = document.getElementById('graph-svg-container');
     this._graph = new ArivuGraph(container, graphData);
@@ -106,9 +109,19 @@ class GraphLoader {
       const content = document.getElementById('genealogy-content');
       content.textContent = 'Generating genealogy narrative…';
       modal.showModal();
-      const resp = await fetch(`/api/genealogy/${encodeURIComponent(this.paperId)}`);
-      const data = await resp.json();
-      content.textContent = data.narrative || data.error || 'No narrative available.';
+      try {
+        const resp = await fetch(`/api/genealogy/${encodeURIComponent(this.paperId)}`);
+        const data = await resp.json();
+        if (data.narrative) {
+          content.textContent = data.narrative;
+        } else if (data.error === 'LLM not configured') {
+          content.textContent = 'Genealogy stories require an AI language model (Groq). The service is not configured on this instance.';
+        } else {
+          content.textContent = data.error || 'No narrative available. The graph may still be loading.';
+        }
+      } catch (err) {
+        content.textContent = 'Failed to generate genealogy narrative. Please try again.';
+      }
     });
     document.getElementById('genealogy-close')?.addEventListener('click', () => {
       document.getElementById('genealogy-modal').close();
@@ -149,17 +162,24 @@ class GraphLoader {
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
+      send.disabled = true;
 
       messages.innerHTML += `<div style="text-align:right;margin-bottom:6px;font-size:0.85rem;color:var(--text-primary)">${text}</div>`;
+      messages.scrollTop = messages.scrollHeight;
 
-      const resp = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ message: text, graph_summary: graphSummary, current_view: { type: 'overview' } })
-      });
-      const data = await resp.json();
-      const reply = data.response || 'No response.';
-      messages.innerHTML += `<div style="margin-bottom:8px;font-size:0.85rem;color:var(--text-secondary)">${reply}</div>`;
+      try {
+        const resp = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ message: text, graph_summary: graphSummary, current_view: { type: 'overview' } })
+        });
+        const data = await resp.json();
+        const reply = data.response || 'No response.';
+        messages.innerHTML += `<div style="margin-bottom:8px;font-size:0.85rem;color:var(--text-secondary)">${reply}</div>`;
+      } catch (err) {
+        messages.innerHTML += `<div style="margin-bottom:8px;font-size:0.85rem;color:var(--danger)">Failed to get response. Please try again.</div>`;
+      }
+      send.disabled = false;
       messages.scrollTop = messages.scrollHeight;
     };
 

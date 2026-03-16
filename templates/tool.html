@@ -7,12 +7,16 @@
 
   <!-- HEADER -->
   <header class="tool-header">
-    <a href="/" class="logo-link" aria-label="Arivu home">
-      <svg width="72" height="20" viewBox="0 0 72 20" aria-hidden="true">
-        <text x="0" y="16" font-family="Inter" font-weight="700" font-size="18"
-              fill="#D4A843" letter-spacing="-0.5">arivu</text>
-      </svg>
-    </a>
+    <div style="display:flex;align-items:center;gap:12px">
+      <a href="/" class="logo-link" aria-label="Arivu home" title="Back to search"
+         style="display:flex;align-items:center;gap:6px;text-decoration:none;color:var(--text-secondary);font-size:0.85rem">
+        <span style="font-size:1.1rem">&larr;</span>
+        <svg width="72" height="20" viewBox="0 0 72 20" aria-hidden="true">
+          <text x="0" y="16" font-family="Inter" font-weight="700" font-size="18"
+                fill="#D4A843" letter-spacing="-0.5">arivu</text>
+        </svg>
+      </a>
+    </div>
 
     <div class="header-center" id="header-paper-info">
       <!-- Populated by JS once graph loads -->
@@ -167,7 +171,14 @@
 
   <!-- Accessible table view (hidden by default) -->
   <div id="table-view" hidden role="main" aria-label="Citation graph as accessible table">
-    <h2>Papers in this research lineage</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h2 style="margin:0">Papers in this research lineage</h2>
+      <button onclick="document.getElementById('table-view').hidden=true"
+              style="background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--bg-elevated);
+                     padding:6px 16px;border-radius:6px;cursor:pointer;font-size:0.85rem">
+        &larr; Back to graph
+      </button>
+    </div>
     <table id="papers-table">
       <thead>
         <tr>

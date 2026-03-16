@@ -802,22 +802,26 @@ def create_app():
         """Return LLM-generated genealogy story for a graph."""
         session_id = g.session_id
 
-        graph, _ = _load_graph_for_request(paper_id, session_id)
+        try:
+            graph, _ = _load_graph_for_request(paper_id, session_id)
+        except Exception as exc:
+            app.logger.error(f"Genealogy graph load failed: {exc}")
+            return jsonify({"narrative": None, "error": "Could not load graph data"}), 500
+
         if graph is None:
-            return jsonify({"error": "Graph not found"}), 404
+            return jsonify({"narrative": None, "error": "Graph not found. Try building the graph again."}), 404
 
         llm = get_llm_client()
         if not llm.available:
             return jsonify({"narrative": None, "error": "LLM not configured"})
 
-        graph_json = graph.export_to_json()
-
         try:
+            graph_json = graph.export_to_json()
             result = llm.generate_genealogy_story(graph_json)
             return jsonify(result)
         except Exception as exc:
             app.logger.error(f"Genealogy generation failed: {exc}")
-            return jsonify({"narrative": None, "error": "Generation failed"}), 500
+            return jsonify({"narrative": None, "error": "Generation failed. The AI model may be unavailable."}), 500
 
     # ─── POST /api/chat ──────────────────────────────────────────────────
 

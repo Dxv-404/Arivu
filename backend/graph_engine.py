@@ -406,6 +406,42 @@ class AncestryGraph:
 
         self._on_graph_complete(self._graph_id, session_id_bk)
 
+        # Enrich node pruning_impact and is_bottleneck from precomputed data
+        try:
+            impacts = getattr(self, "_pruning_impacts", {})
+            if impacts:
+                impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in impacts.items()}
+                # Top 20% of nodes by impact are bottlenecks
+                if impact_lookup:
+                    sorted_vals = sorted(impact_lookup.values(), reverse=True)
+                    threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
+                for node in graph_json.get("nodes", []):
+                    cc = impact_lookup.get(node["id"], 0)
+                    node["pruning_impact"] = cc
+                    node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
+        except Exception as exc:
+            logger.warning(f"Failed to enrich node pruning impacts: {exc}")
+
+        # Attach panel data (DNA, diversity, leaderboard) to graph JSON
+        # These were computed in _on_graph_complete and stored in DB.
+        try:
+            panel_row = db.fetchone(
+                "SELECT leaderboard_json, dna_json, diversity_json FROM graphs WHERE graph_id = %s",
+                (self._graph_id,),
+            )
+            if panel_row:
+                if panel_row.get("leaderboard_json"):
+                    lb = panel_row["leaderboard_json"]
+                    graph_json["leaderboard"] = lb if isinstance(lb, list) else json.loads(lb)
+                if panel_row.get("dna_json"):
+                    dna = panel_row["dna_json"]
+                    graph_json["dna_profile"] = dna if isinstance(dna, dict) else json.loads(dna)
+                if panel_row.get("diversity_json"):
+                    div = panel_row["diversity_json"]
+                    graph_json["diversity_score"] = div if isinstance(div, dict) else json.loads(div)
+        except Exception as exc:
+            logger.warning(f"Failed to attach panel data to graph JSON: {exc}")
+
         await self._emit("done", "Graph ready.", graph=graph_json)
         return graph_json
 
@@ -441,6 +477,8 @@ class AncestryGraph:
         # 2. Leaderboard — precompute pruning impact for every node
         try:
             leaderboard = compute_all_pruning_impacts(self.graph)
+            # Store raw impacts for enriching graph_json nodes later
+            self._pruning_impacts = leaderboard
             sorted_leaderboard = sorted(
                 [{"paper_id": k, **v} for k, v in leaderboard.items()],
                 key=lambda x: x["collapse_count"],
