@@ -45,6 +45,17 @@ from exceptions import (
 
 logger = logging.getLogger(__name__)
 
+
+# Semantic Scholar rate limit:
+# No API key → 1 req/sec. With API key → 10 req/sec.
+# 1.1s delay gives a small buffer above the 1 req/sec limit.
+async def _s2_delay() -> None:
+    """Sleep between S2 API calls when no API key is configured."""
+    from backend.config import Config
+    if not Config.S2_API_KEY:
+        await asyncio.sleep(1.1)
+
+
 _DEDUP = PaperDeduplicator()
 
 # Semantic Scholar fields we always request
@@ -194,6 +205,7 @@ class SmartPaperResolver:
         if config.S2_API_KEY:
             headers["x-api-key"] = config.S2_API_KEY
 
+        await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.get(url, params=params, headers=headers)
@@ -243,6 +255,7 @@ class SmartPaperResolver:
         if config.S2_API_KEY:
             headers["x-api-key"] = config.S2_API_KEY
 
+        await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.get(url, params=params, headers=headers)
@@ -304,6 +317,7 @@ class SmartPaperResolver:
         params = {"fields": "paperId"}
 
         for attempt in range(3):
+            await _s2_delay()
             await coordinated_rate_limiter.throttle("semantic_scholar")
             try:
                 resp = await client.get(url, params=params, headers=headers)
@@ -330,6 +344,7 @@ class SmartPaperResolver:
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
 
         for attempt in range(3):
+            await _s2_delay()
             await coordinated_rate_limiter.throttle("semantic_scholar")
             try:
                 resp = await client.get(url, params=params, headers=headers)
@@ -358,6 +373,7 @@ class SmartPaperResolver:
         headers = {"x-api-key": config.S2_API_KEY} if config.S2_API_KEY else {}
         body = {"ids": s2_ids}
 
+        await _s2_delay()
         await coordinated_rate_limiter.throttle("semantic_scholar")
         try:
             resp = await client.post(url, json=body, params=params, headers=headers)
