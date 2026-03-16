@@ -75,7 +75,18 @@ def normalize_user_input(user_input: str) -> tuple[str, str]:
         "DOI: ",
     ]:
         if text.lower().startswith(prefix.lower()):
-            return text[len(prefix):].strip(), ID_TYPE_DOI
+            stripped = text[len(prefix):].strip()
+            # arXiv DOIs via doi.org URL → convert to arXiv ID
+            m = re.match(r"^10\.48550/arXiv\.(\d{4}\.\d{4,5}(?:v\d+)?)$", stripped, re.IGNORECASE)
+            if m:
+                return _clean_arxiv(m.group(1)), ID_TYPE_ARXIV
+            return stripped, ID_TYPE_DOI
+
+    # ── arXiv DOI (10.48550/arXiv.YYMM.NNNNN) → treat as arXiv ID ──────────
+    # S2 doesn't resolve arXiv DOIs via DOI: prefix; convert to ARXIV: format.
+    m = re.match(r"^10\.48550/arXiv\.(\d{4}\.\d{4,5}(?:v\d+)?)$", text, re.IGNORECASE)
+    if m:
+        return _clean_arxiv(m.group(1)), ID_TYPE_ARXIV
 
     # ── Bare DOI (always starts with 10.) ────────────────────────────────────
     if re.match(r"^10\.\d{4,9}/\S+$", text):

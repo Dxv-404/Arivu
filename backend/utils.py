@@ -4,6 +4,7 @@ utils.py — Shared utility functions used across the backend.
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Coroutine, Optional, TypeVar
 
@@ -16,6 +17,11 @@ T = TypeVar("T")
 GALLERY_DIR        = Path(__file__).parent.parent / "data" / "precomputed"
 GALLERY_INDEX_PATH = Path(__file__).parent.parent / "data" / "gallery_index.json"
 
+# Per-thread persistent event loop — avoids "Event loop is closed" errors
+# when module-level async clients (httpx.AsyncClient) cache connections
+# across multiple await_sync() calls within the same thread.
+_thread_local = threading.local()
+
 
 def await_sync(coro: Coroutine[Any, Any, T]) -> T:
     """
@@ -24,7 +30,10 @@ def await_sync(coro: Coroutine[Any, Any, T]) -> T:
     Strategy:
     - If an event loop is already running in this thread (e.g. during async
       tests), schedule on that loop via run_coroutine_threadsafe().
-    - Otherwise create a fresh event loop with asyncio.run().
+    - Otherwise use a persistent per-thread event loop. This is critical
+      because asyncio.run() closes the loop after each call, which breaks
+      cached async clients (like httpx.AsyncClient) that hold references
+      to the old loop's connection pool.
 
     NOTE: asyncio.run_coroutine_threadsafe() returns a concurrent.futures.Future
     that correctly propagates exceptions raised inside the coroutine. Calling
@@ -41,7 +50,12 @@ def await_sync(coro: Coroutine[Any, Any, T]) -> T:
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=120)
 
-    return asyncio.run(coro)
+    # Use a persistent per-thread event loop instead of asyncio.run()
+    if not hasattr(_thread_local, 'loop') or _thread_local.loop.is_closed():
+        _thread_local.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_thread_local.loop)
+
+    return _thread_local.loop.run_until_complete(coro)
 
 
 def load_gallery_index() -> list[dict]:

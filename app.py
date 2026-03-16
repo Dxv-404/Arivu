@@ -854,6 +854,9 @@ def create_app():
         user_message = data.get("message", "")
         graph_summary = data.get("graph_summary", {})
         current_view = data.get("current_view", "overview")
+        # Frontend sends current_view as dict {"type": "overview"} — extract string
+        if isinstance(current_view, dict):
+            current_view = current_view.get("type", "overview")
 
         guide = ChatGuide()
         try:

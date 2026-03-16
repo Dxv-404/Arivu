@@ -10,6 +10,14 @@ Both work — config = Config alias at bottom makes them identical.
 """
 import os
 import logging
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root (parent of backend/) before reading any env vars.
+# In production (Koyeb), real env vars are already set; load_dotenv() is a no-op.
+_env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(_env_path)
 
 logger = logging.getLogger(__name__)
 

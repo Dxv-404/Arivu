@@ -90,7 +90,7 @@ class SessionManager:
         # Create new session
         new_id = self.create_session()
 
-        is_debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+        is_debug = os.environ.get("FLASK_DEBUG", "0").lower() in ("1", "true", "yes")
 
         @after_this_request
         def _set_cookie(response):
