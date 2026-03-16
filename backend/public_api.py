@@ -292,3 +292,85 @@ def v1_delete_subscription(sub_id):
     if n and n > 0:
         return jsonify({"success": True})
     return jsonify({"error": "Subscription not found", "code": "NOT_FOUND"}), 404
+
+
+# ── Phase 8 Public API Extensions ─────────────────────────────────────────────
+
+
+@public_api.route("/researchers/<author_id>/profile")
+@require_api_key
+def v1_researcher_profile(author_id):
+    """Return a researcher profile built from graph data."""
+    from backend.researcher_profiles import ResearcherProfileBuilder
+
+    # Find the most recent graph containing this author
+    row = db.fetchone(
+        """
+        SELECT graph_json_url FROM graphs
+        WHERE seed_paper_id IS NOT NULL
+        ORDER BY computed_at DESC NULLS LAST
+        LIMIT 1
+        """,
+    )
+    if not row or not row.get("graph_json_url"):
+        return jsonify({"error": "No graph available", "code": "NOT_FOUND"}), 404
+
+    try:
+        from backend.r2_client import R2Client
+        graph = R2Client().download_json(row["graph_json_url"])
+        profile = ResearcherProfileBuilder().build_profile(author_id, graph)
+        return jsonify(profile)
+    except Exception as exc:
+        logger.error(f"v1 researcher profile failed: {exc}")
+        return jsonify({"error": str(exc), "code": "PROFILE_ERROR"}), 500
+
+
+@public_api.route("/literature-review", methods=["POST"])
+@require_api_key
+def v1_literature_review():
+    """Generate a structured literature review from a graph."""
+    from backend.literature_review_engine import LiteratureReviewEngine
+
+    data = request.get_json(silent=True) or {}
+    paper_id = data.get("paper_id", "")
+    if not paper_id:
+        return jsonify({"error": "paper_id required", "code": "BAD_REQUEST"}), 400
+
+    row = db.fetchone(
+        "SELECT graph_json_url FROM graphs WHERE seed_paper_id = %s ORDER BY computed_at DESC LIMIT 1",
+        (paper_id,),
+    )
+    if not row or not row.get("graph_json_url"):
+        return jsonify({"error": "Graph not found", "code": "NOT_FOUND"}), 404
+
+    try:
+        from backend.r2_client import R2Client
+        graph = R2Client().download_json(row["graph_json_url"])
+        result = LiteratureReviewEngine().generate(graph, paper_id)
+        return jsonify(result)
+    except Exception as exc:
+        logger.error(f"v1 literature review failed: {exc}")
+        return jsonify({"error": str(exc), "code": "REVIEW_ERROR"}), 500
+
+
+@public_api.route("/papers/<paper_id>/journalism")
+@require_api_key
+def v1_paper_journalism(paper_id):
+    """Return science journalism analysis for a paper."""
+    from backend.science_journalism import ScienceJournalismLayer
+
+    row = db.fetchone(
+        "SELECT graph_json_url FROM graphs WHERE seed_paper_id = %s ORDER BY computed_at DESC LIMIT 1",
+        (paper_id,),
+    )
+    if not row or not row.get("graph_json_url"):
+        return jsonify({"error": "Graph not found", "code": "NOT_FOUND"}), 404
+
+    try:
+        from backend.r2_client import R2Client
+        graph = R2Client().download_json(row["graph_json_url"])
+        result = ScienceJournalismLayer().analyze(graph, paper_id)
+        return jsonify(result.to_dict())
+    except Exception as exc:
+        logger.error(f"v1 journalism analysis failed: {exc}")
+        return jsonify({"error": str(exc), "code": "JOURNALISM_ERROR"}), 500

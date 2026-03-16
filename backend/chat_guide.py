@@ -193,15 +193,15 @@ def _get_persona_framing(session_id: str) -> str:
             "Frame your guidance around discovery. Highlight surprising connections, "
             "white space, and intersections the user might not have noticed."
         ),
-        "strategist": (
+        "critic": (
             "Focus on impact, risk, and resource allocation. Help them identify bottlenecks "
             "and which papers are critical to the field's survival."
         ),
-        "builder": (
+        "innovator": (
             "Emphasize methods, reproducibility, and practical next steps. "
             "Help them see how they can extend or combine existing techniques."
         ),
-        "skeptic": (
+        "historian": (
             "Highlight contradictions, alternative explanations, and evidence quality. "
             "Push back gently; encourage them to test assumptions."
         ),

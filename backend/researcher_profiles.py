@@ -4,6 +4,7 @@ backend/researcher_profiles.py — ResearcherProfileBuilder (F3.1)
 Builds researcher profiles from graph data. Profiles include contribution type
 classification, intellectual heroes, and citation patterns.
 """
+import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -80,7 +81,6 @@ class ResearcherProfileBuilder:
         for node in nodes:
             authors = node.get("authors") or []
             for a in authors:
-                import hashlib
                 a_id = hashlib.sha256(a.strip().lower().encode()).hexdigest()[:32]
                 if a_id == author_id:
                     author_papers.append(node)
