@@ -113,4 +113,4 @@ If you are about to decide something not recorded here, add it first.
 14. backend/mailer.py: Welcome email updated (no "10 graphs/month" text)
 **Alternatives considered:** Full deletion (risky, irreversible), Config-gated dormant (no cleanup).
 **Rationale:** Removes user-facing billing friction while preserving Stripe integration code for portfolio demonstration.
-**Implications:** CONFLICT-009 (TIER_ORDER Phase 7 vs 8) is moot. CONFLICT-007 (Stripe version) is moot. Phase 7 §0.1/§2.3/§2.4 SKIPPED. Phase 8 §0.7 SKIPPED. All future routes use @require_auth only. Existing Neon users need one-time UPDATE to tier='researcher'.
+**Implications:** CONFLICT-009 (TIER_ORDER Phase 7 vs 8) is moot. CONFLICT-007 (Stripe version) is moot. Phase 7 §0.1/§2.3/§2.4 SKIPPED. Phase 8 §0.7 SKIPPED. All future routes use @require_auth only. Existing Neon users updated to tier='researcher' via one-time SQL (2026-03-16, 0 rows — no users registered yet)..
