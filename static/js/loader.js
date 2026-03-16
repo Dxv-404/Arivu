@@ -54,10 +54,15 @@ class GraphLoader {
         this._updateProgress('✅', 'Graph ready!', 100);
         clearInterval(this._stallTimer);
         this.eventSource.close();
-        if (data.cached) {
-          fetch(data.graph_url).then(r => r.json()).then(g => this._initGraph(g));
-        } else {
+        // Both cached and fresh builds send graph data inline via data.graph.
+        // (data.graph_url was never populated by the server — that code path was a bug.)
+        if (data.graph) {
           this._initGraph(data.graph);
+        } else if (data.graph_url) {
+          fetch(data.graph_url).then(r => r.json()).then(g => this._initGraph(g))
+            .catch(() => this._showError('Failed to load graph data.'));
+        } else {
+          this._showError('Graph completed but data is missing. Please refresh and try again.');
         }
         break;
       case 'error':
@@ -69,6 +74,7 @@ class GraphLoader {
   }
 
   _initGraph(graphData) {
+    try {
     // Use classList (not .hidden attribute) — the CSS rule
     // #loading-overlay { display:flex } has higher specificity than
     // the UA [hidden] { display:none }, so .hidden = true won't work.
@@ -149,6 +155,11 @@ class GraphLoader {
     if (window.ExportPanel) {
       const exportPanel = new ExportPanel("export-panel-container");
       exportPanel.render();
+    }
+
+    } catch (err) {
+      console.error('Graph initialization error:', err);
+      this._showError(`Graph loaded but failed to render: ${err.message}. Please refresh.`);
     }
   }
 
