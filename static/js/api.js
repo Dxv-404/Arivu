@@ -51,7 +51,16 @@ class PaperSearch {
 
   _renderResults(papers) {
     if (!papers.length) {
-      this.results.innerHTML = '<div class="search-result"><div class="result-title" style="color:var(--text-muted)">No results. Try a DOI or arXiv ID.</div></div>';
+      this.results.innerHTML = `<div class="search-result">
+        <div class="result-title" style="color:var(--text-muted)">No results found.</div>
+        <div class="result-meta" style="margin-top:8px;line-height:1.6">
+          Try one of these formats:<br>
+          • <strong>Paper title:</strong> "Attention Is All You Need"<br>
+          • <strong>DOI:</strong> 10.1038/nature12373<br>
+          • <strong>arXiv ID:</strong> 1706.03762<br>
+          • <strong>S2 ID:</strong> 40-character hex string
+        </div>
+      </div>`;
       return;
     }
 
