@@ -40,6 +40,7 @@ class Config:
     # ── External APIs ─────────────────────────────────────────────
     S2_API_KEY          = os.environ.get("S2_API_KEY", "")
     OPENALEX_EMAIL      = os.environ.get("OPENALEX_EMAIL", "")
+    OPENALEX_API_KEY    = os.environ.get("OPENALEX_API_KEY", "")
     CROSSREF_MAILTO     = os.environ.get("CROSSREF_MAILTO", "")
     GROQ_API_KEY        = os.environ.get("GROQ_API_KEY", "")
     CORE_API_KEY        = os.environ.get("CORE_API_KEY", "")

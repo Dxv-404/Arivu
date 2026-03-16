@@ -11,6 +11,7 @@ server restarts — this is intentional: limits are per-process, not per-cluster
 """
 import asyncio
 import logging
+import threading
 import time
 from collections import defaultdict
 
@@ -20,7 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class _SlidingWindow:
-    """Thread-safe sliding-window counter for one (source, session) pair."""
+    """Thread-safe sliding-window counter for one (source, session) pair.
+
+    Uses threading.Lock (not asyncio.Lock) to avoid event-loop binding issues
+    when called from different per-thread event loops via await_sync().
+    asyncio.sleep() is called outside the lock to avoid blocking threads.
+    """
 
     __slots__ = ("limit", "window_seconds", "timestamps", "_lock")
 
@@ -28,24 +34,26 @@ class _SlidingWindow:
         self.limit = limit
         self.window_seconds = window_seconds
         self.timestamps: list[float] = []
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self) -> None:
         """Block until a request slot is available."""
-        async with self._lock:
-            now = time.time()
-            cutoff = now - self.window_seconds
-            self.timestamps = [t for t in self.timestamps if t > cutoff]
-
-            if len(self.timestamps) >= self.limit:
-                # Wait until the oldest timestamp leaves the window
-                wait_until = self.timestamps[0] + self.window_seconds
-                await asyncio.sleep(wait_until - now + 0.01)
+        while True:
+            with self._lock:
                 now = time.time()
                 cutoff = now - self.window_seconds
                 self.timestamps = [t for t in self.timestamps if t > cutoff]
 
-            self.timestamps.append(time.time())
+                if len(self.timestamps) < self.limit:
+                    self.timestamps.append(time.time())
+                    return
+
+                # Need to wait — compute how long
+                wait_until = self.timestamps[0] + self.window_seconds
+                wait_time = max(wait_until - now + 0.01, 0.01)
+
+            # Sleep OUTSIDE the lock so we don't block other threads
+            await asyncio.sleep(wait_time)
 
     def is_available(self) -> bool:
         now = time.time()
@@ -89,7 +97,7 @@ class CoordinatedRateLimiter:
         }
         # Tracks when a source was rate-limited (backoff until)
         self._backoff_until: dict[str, float] = {}
-        self._backoff_lock = asyncio.Lock()
+        self._backoff_lock = threading.Lock()
 
     async def throttle(self, source: str):
         """
@@ -99,13 +107,16 @@ class CoordinatedRateLimiter:
             await rate_limiter.throttle("semantic_scholar")
             response = await http_client.get(...)
         """
-        # Check backoff
-        async with self._backoff_lock:
+        # Check backoff — read under lock, sleep outside
+        wait = 0.0
+        with self._backoff_lock:
             until = self._backoff_until.get(source, 0)
             if until > time.time():
                 wait = until - time.time()
-                logger.debug(f"Backing off {source} for {wait:.1f}s")
-                await asyncio.sleep(wait)
+
+        if wait > 0:
+            logger.debug(f"Backing off {source} for {wait:.1f}s")
+            await asyncio.sleep(wait)
 
         window = self._windows.get(source)
         if window:
@@ -113,7 +124,7 @@ class CoordinatedRateLimiter:
 
     async def record_rate_limit(self, source: str, retry_after: int = 30) -> None:
         """Call when a 429 is received from an external API."""
-        async with self._backoff_lock:
+        with self._backoff_lock:
             self._backoff_until[source] = time.time() + retry_after
         logger.warning(f"External 429 from {source} — backing off {retry_after}s")
 
@@ -210,7 +221,7 @@ class ArivuRateLimiter:
     def __init__(self):
         # (session_id, endpoint) -> list[timestamp]
         self._windows: dict[tuple[str, str], list[float]] = defaultdict(list)
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def check(
         self, session_id: str, endpoint: str
@@ -225,7 +236,7 @@ class ArivuRateLimiter:
         max_req, window_secs = self.LIMITS[endpoint]
         key = (session_id, endpoint)
 
-        async with self._lock:
+        with self._lock:
             now = time.time()
             cutoff = now - window_secs
             self._windows[key] = [t for t in self._windows[key] if t > cutoff]
@@ -249,17 +260,35 @@ class ArivuRateLimiter:
             return True, headers
 
     def check_sync(self, session_id: str, endpoint: str) -> tuple[bool, dict]:
-        """Synchronous wrapper around async check() for Flask route handlers."""
-        import asyncio as _asyncio
-        try:
-            loop = _asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(_asyncio.run, self.check(session_id, endpoint)).result()
-            return loop.run_until_complete(self.check(session_id, endpoint))
-        except Exception:
-            return True, {}  # fail-open on errors
+        """Synchronous wrapper — check() uses threading.Lock so we can call it directly."""
+        if endpoint not in self.LIMITS:
+            return True, {}
+
+        max_req, window_secs = self.LIMITS[endpoint]
+        key = (session_id, endpoint)
+
+        with self._lock:
+            now = time.time()
+            cutoff = now - window_secs
+            self._windows[key] = [t for t in self._windows[key] if t > cutoff]
+            count = len(self._windows[key])
+            remaining = max_req - count
+            reset_at = int(cutoff + window_secs)
+
+            headers = {
+                "X-RateLimit-Limit":     str(max_req),
+                "X-RateLimit-Remaining": str(max(0, remaining - 1)),
+                "X-RateLimit-Reset":     str(reset_at),
+                "X-RateLimit-Window":    str(window_secs),
+            }
+
+            if count >= max_req:
+                retry_after = int(self._windows[key][0] + window_secs - now) + 1
+                headers["Retry-After"] = str(retry_after)
+                return False, headers
+
+            self._windows[key].append(now)
+            return True, headers
 
     def get_429_response(self, headers: dict) -> dict:
         """Alias for get_429_body() — used by Phase 3+ routes."""

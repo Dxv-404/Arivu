@@ -176,34 +176,38 @@ class DNAChart {
 function createOrphanCard(orphan) {
   const card = document.createElement('div');
   card.className = 'orphan-card';
-  card.dataset.paperId = orphan.paper?.paper_id || '';
+  // Support both flat (backend) and nested (paper.paper_id) formats
+  const paperId = orphan.paper_id || orphan.paper?.paper_id || '';
+  card.dataset.paperId = paperId;
 
   const relevancePct = Math.round((orphan.relevance_score || 0) * 100);
-  const survivalPct = orphan.peak_citations > 0
-    ? Math.round((orphan.current_rate / orphan.peak_citations) * 100) : 0;
+  const declinePct = Math.round((orphan.decline_rate || 0) * 100);
 
   const esc = s => String(s || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const author = (orphan.paper?.authors || [])[0]?.split(' ').pop() || '';
+  const title = orphan.title || orphan.paper?.title || 'Unknown';
+  const year = orphan.year || orphan.paper?.year || '';
+  const citations = orphan.citation_count || 0;
 
   card.innerHTML = `
-    <div class="orphan-concept">"${esc(truncate(orphan.key_concept || '', 60))}"</div>
+    <div class="orphan-concept">"${esc(truncate(title, 60))}"</div>
     <div class="orphan-meta">
-      <span class="orphan-paper">${esc(author)} ${orphan.paper?.year || ''}</span>
-      <span class="orphan-peak">Peak: ${orphan.peak_year} (${Math.round(orphan.peak_citations||0)}/yr)</span>
+      <span class="orphan-paper">${year} · ${citations} citations</span>
+      <span class="orphan-peak">Peak: ${orphan.peak_year || '?'} · Decline: ${declinePct}%</span>
     </div>
     <div class="orphan-sparkline"></div>
     <div class="orphan-stats">
-      <span>Now: ${Math.round(orphan.current_rate||0)}/yr (${survivalPct}% of peak)</span>
-      <span class="orphan-relevance" title="Similarity to current research">Relevance: ${relevancePct}%</span>
+      <span>Fields: ${(orphan.fields_of_study || []).join(', ') || 'N/A'}</span>
+      <span class="orphan-relevance" title="Orphan relevance score">Relevance: ${relevancePct}%</span>
     </div>
     <button class="orphan-highlight-btn">Highlight in graph</button>
   `;
 
+  // Sparkline only renders if trajectory data is provided
   renderSparkline(card.querySelector('.orphan-sparkline'), orphan.trajectory || []);
 
   card.querySelector('.orphan-highlight-btn').addEventListener('click', () => {
     window.dispatchEvent(new CustomEvent('arivu:highlight-node', {
-      detail: { paperId: orphan.paper?.paper_id }
+      detail: { paperId }
     }));
   });
 

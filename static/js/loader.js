@@ -102,6 +102,12 @@ class GraphLoader {
       .then(r => r.json())
       .then(data => this._panel.populateOrphans(data.orphans));
 
+    // Load data coverage
+    fetch(`/api/coverage-report/${encodeURIComponent(this.paperId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) this._renderCoverage(data); })
+      .catch(() => {});
+
     // Leaderboard toggle
     document.getElementById('leaderboard-toggle')?.addEventListener('click', () => {
       const sidebar = document.getElementById('leaderboard-sidebar');
@@ -213,6 +219,34 @@ class GraphLoader {
           <td>${n.pruning_impact ? n.pruning_impact + ' papers' : '—'}</td>
         </tr>
       `).join('');
+  }
+
+  _renderCoverage(data) {
+    const container = document.getElementById('coverage-details');
+    if (!container) return;
+    const pct = data.abstract_coverage?.pct || 0;
+    const label = data.reliability_label || 'LOW';
+    const labelColor = label === 'HIGH' ? 'var(--success)' : label === 'MEDIUM' ? 'var(--warning)' : 'var(--danger)';
+    container.innerHTML = `
+      <div style="padding:16px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span style="font-size:2rem;font-weight:700;color:${labelColor}">${pct}%</span>
+          <div>
+            <div style="font-size:0.9rem;color:var(--text-primary)">Abstract Coverage</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">${data.abstract_coverage?.count || 0} of ${data.abstract_coverage?.total || 0} papers have abstracts</div>
+          </div>
+        </div>
+        <div style="background:var(--bg-elevated);border-radius:6px;height:8px;overflow:hidden;margin-bottom:12px">
+          <div style="width:${pct}%;height:100%;background:${labelColor};border-radius:6px;transition:width 0.5s ease"></div>
+        </div>
+        <div style="font-size:0.8rem;color:var(--text-secondary)">
+          Reliability: <span style="color:${labelColor};font-weight:600">${label}</span>
+          — ${label === 'HIGH' ? 'Graph insights are well-supported by paper abstracts.' :
+               label === 'MEDIUM' ? 'Some papers lack abstracts. Insights may be incomplete.' :
+               'Many papers lack abstracts. Consider this when interpreting results.'}
+        </div>
+      </div>
+    `;
   }
 
   _updateProgress(icon, message, pct) {

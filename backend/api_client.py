@@ -22,6 +22,7 @@ Caching:
     Cache TTL is 30 days (field-dependent per spec section 5.11). Embeddings cached separately.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -106,6 +107,21 @@ class SmartPaperResolver:
         if self._http and not self._http.is_closed:
             await self._http.aclose()
 
+    @staticmethod
+    def _oa_headers() -> dict:
+        """Standard headers for all OpenAlex requests."""
+        headers = {}
+        if config.OPENALEX_EMAIL:
+            headers["User-Agent"] = f"Arivu/1.0 (mailto:{config.OPENALEX_EMAIL})"
+        return headers
+
+    @staticmethod
+    def _oa_params(params: dict) -> dict:
+        """Inject OpenAlex API key into query params if configured."""
+        if config.OPENALEX_API_KEY:
+            params["api_key"] = config.OPENALEX_API_KEY
+        return params
+
     # ─── Public API ──────────────────────────────────────────────────────────
 
     async def resolve(self, identifier: str, id_type: str) -> Paper:
@@ -119,6 +135,11 @@ class SmartPaperResolver:
         # Translate non-S2 IDs to S2 corpus ID first
         s2_id = await self._to_s2_id(identifier, id_type)
         if not s2_id:
+            # S2 couldn't resolve — try OpenAlex-only for DOI/arXiv types
+            if id_type in (ID_TYPE_DOI, ID_TYPE_ARXIV):
+                paper = await self._resolve_without_s2(identifier, id_type)
+                if paper:
+                    return paper
             raise PaperNotFoundError(identifier)
 
         # Check DB cache
@@ -342,15 +363,12 @@ class SmartPaperResolver:
         if id_type == ID_TYPE_OPENALEX:
             # OpenAlex ID → get DOI via OpenAlex API → resolve DOI to S2
             client = await self._client()
-            oa_headers = {}
-            if config.OPENALEX_EMAIL:
-                oa_headers["User-Agent"] = f"Arivu/1.0 (mailto:{config.OPENALEX_EMAIL})"
             await coordinated_rate_limiter.throttle("openalex")
             try:
                 resp = await client.get(
                     f"https://api.openalex.org/works/{identifier}",
-                    params={"select": "id,doi"},
-                    headers=oa_headers,
+                    params=self._oa_params({"select": "id,doi"}),
+                    headers=self._oa_headers(),
                 )
                 if resp.status_code == 200:
                     doi_raw = resp.json().get("doi") or ""
@@ -377,7 +395,7 @@ class SmartPaperResolver:
                 if resp.status_code in (404, 400):
                     return None
                 if resp.status_code == 429:
-                    wait = min(30 * (2 ** attempt), 120)
+                    wait = min(3 * (2 ** attempt), 10)
                     logger.debug(f"S2 429 on ID translate, retrying in {wait}s (attempt {attempt+1}/3)")
                     await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
                     await asyncio.sleep(wait)
@@ -404,7 +422,7 @@ class SmartPaperResolver:
                 if resp.status_code == 404:
                     return None
                 if resp.status_code == 429:
-                    wait = min(30 * (2 ** attempt), 120)
+                    wait = min(3 * (2 ** attempt), 10)
                     logger.debug(f"S2 429 on fetch, retrying in {wait}s (attempt {attempt+1}/3)")
                     await coordinated_rate_limiter.record_rate_limit("semantic_scholar", retry_after=wait)
                     await asyncio.sleep(wait)
@@ -449,14 +467,14 @@ class SmartPaperResolver:
         """Fetch OpenAlex metadata by DOI. Used for abstract enrichment."""
         client = await self._client()
         url = f"https://api.openalex.org/works/doi:{doi}"
-        params = {"select": _OA_FIELDS}
-        headers = {}
-        if config.OPENALEX_EMAIL:
-            headers["User-Agent"] = f"Arivu/1.0 (mailto:{config.OPENALEX_EMAIL})"
 
         await coordinated_rate_limiter.throttle("openalex")
         try:
-            resp = await client.get(url, params=params, headers=headers)
+            resp = await client.get(
+                url,
+                params=self._oa_params({"select": _OA_FIELDS}),
+                headers=self._oa_headers(),
+            )
             if resp.status_code in (404, 400):
                 return None
             if resp.status_code == 429:
@@ -473,19 +491,17 @@ class SmartPaperResolver:
     async def _search_openalex(self, query: str, limit: int = 8) -> list[Paper]:
         """Fallback title search via OpenAlex when S2 is rate-limited."""
         client = await self._client()
-        params = {
-            "search": query,
-            "per_page": limit,
-            "select": _OA_FIELDS,
-        }
-        headers = {}
-        if config.OPENALEX_EMAIL:
-            headers["User-Agent"] = f"Arivu/1.0 (mailto:{config.OPENALEX_EMAIL})"
 
         await coordinated_rate_limiter.throttle("openalex")
         try:
             resp = await client.get(
-                "https://api.openalex.org/works", params=params, headers=headers,
+                "https://api.openalex.org/works",
+                params=self._oa_params({
+                    "search": query,
+                    "per_page": limit,
+                    "select": _OA_FIELDS,
+                }),
+                headers=self._oa_headers(),
             )
             if resp.status_code in (429, 404):
                 return []
@@ -532,17 +548,14 @@ class SmartPaperResolver:
             return []
 
         client = await self._client()
-        headers = {}
-        if config.OPENALEX_EMAIL:
-            headers["User-Agent"] = f"Arivu/1.0 (mailto:{config.OPENALEX_EMAIL})"
 
         # Step 1: Get referenced_works list from OpenAlex
         await coordinated_rate_limiter.throttle("openalex")
         try:
             resp = await client.get(
                 f"https://api.openalex.org/works/doi:{doi}",
-                params={"select": "id,referenced_works"},
-                headers=headers,
+                params=self._oa_params({"select": "id,referenced_works"}),
+                headers=self._oa_headers(),
             )
             if resp.status_code != 200:
                 return []
@@ -571,12 +584,12 @@ class SmartPaperResolver:
             id_filter = "|".join(ref_oa_ids)
             resp = await client.get(
                 "https://api.openalex.org/works",
-                params={
+                params=self._oa_params({
                     "filter": f"openalex:{id_filter}",
                     "per_page": 100,
                     "select": _OA_FIELDS,
-                },
-                headers=headers,
+                }),
+                headers=self._oa_headers(),
             )
             if resp.status_code != 200:
                 return []
@@ -602,24 +615,37 @@ class SmartPaperResolver:
         papers = []
         for ref in parsed_refs:
             ref_doi = ref.get("doi")
-            s2_id = doi_to_s2.get(ref_doi) if ref_doi else None
-            if not s2_id:
+            pid = doi_to_s2.get(ref_doi) if ref_doi else None
+            is_synthetic = False
+            if not pid and ref_doi:
+                # S2 couldn't resolve this DOI — use synthetic ID so BFS can continue
+                pid = hashlib.sha256(f"doi:{ref_doi}".encode()).hexdigest()[:40]
+                is_synthetic = True
+            if not pid:
                 continue
-            papers.append(Paper(
-                paper_id=s2_id,
+            # Use DOI URL for synthetic IDs (S2 URLs would 404), S2 URL for real IDs
+            if is_synthetic and ref_doi:
+                paper_url = f"https://doi.org/{ref_doi}"
+            else:
+                paper_url = f"https://www.semanticscholar.org/paper/{pid}"
+            paper = Paper(
+                paper_id=pid,
                 title=ref.get("title", "Unknown"),
                 abstract=ref.get("abstract"),
                 year=ref.get("year"),
                 citation_count=ref.get("citation_count", 0) or 0,
                 authors=ref.get("authors") or [],
                 doi=ref_doi,
-                url=f"https://www.semanticscholar.org/paper/{s2_id}",
+                url=paper_url,
                 text_tier=3 if ref.get("abstract") else 4,
-            ))
+            )
+            # Cache the paper so BFS at deeper levels can find its DOI
+            self._save_to_cache(paper)
+            papers.append(paper)
 
         logger.info(
             f"OpenAlex refs fallback: {len(papers)}/{len(parsed_refs)} "
-            f"resolved to S2 IDs for {paper_id[:12]}…"
+            f"references resolved for {paper_id[:12]}…"
         )
         return papers
 
@@ -720,6 +746,68 @@ class SmartPaperResolver:
         )
         self._save_to_cache(paper)
         logger.info(f"Resolved {s2_id[:12]}… via OpenAlex fallback (DOI: {doi_for_oa})")
+        return paper
+
+    async def _resolve_without_s2(
+        self, identifier: str, id_type: str,
+    ) -> Optional[Paper]:
+        """
+        Resolve a paper when S2 is fully rate-limited or unavailable.
+
+        Uses OpenAlex data with a synthetic paper_id: a deterministic 40-char
+        hex string derived from SHA-256(doi). The rest of the system (graph
+        engine, BFS, exports) works unchanged because synthetic IDs have the
+        same format as real S2 corpus IDs.
+
+        The DOI is stored in the papers table, so:
+        - _get_openalex_references() can find it for BFS expansion
+        - The graph cache query (WHERE doi = %s) can match it
+        """
+        if id_type == ID_TYPE_DOI:
+            doi = identifier
+        elif id_type == ID_TYPE_ARXIV:
+            doi = f"10.48550/arXiv.{identifier}"
+        else:
+            return None
+
+        # Check if we already have this DOI in our DB with a real paper_id
+        try:
+            row = db.fetchone("SELECT paper_id FROM papers WHERE doi = %s", (doi,))
+            if row:
+                cached = self._load_from_cache(row["paper_id"])
+                if cached:
+                    logger.info(f"Resolved {doi} from DB cache (existing paper_id)")
+                    return cached
+        except Exception:
+            pass
+
+        # Generate synthetic paper_id from DOI (deterministic, 40-char hex)
+        synthetic_id = hashlib.sha256(f"doi:{doi}".encode()).hexdigest()[:40]
+
+        # Check if we already cached this synthetic ID
+        cached = self._load_from_cache(synthetic_id)
+        if cached:
+            return cached
+
+        # Fetch from OpenAlex
+        oa_data = await self._fetch_openalex_by_doi(doi)
+        if not oa_data:
+            return None
+
+        paper = Paper(
+            paper_id=synthetic_id,
+            title=oa_data.get("title", "Unknown"),
+            abstract=oa_data.get("abstract"),
+            year=oa_data.get("year"),
+            citation_count=oa_data.get("citation_count", 0) or 0,
+            authors=oa_data.get("authors") or [],
+            doi=doi,
+            url=f"https://doi.org/{doi}",
+            text_tier=3 if oa_data.get("abstract") else 4,
+            source_ids={"openalex": oa_data.get("openalex_id"), "doi": doi},
+        )
+        self._save_to_cache(paper)
+        logger.info(f"Resolved {doi} via OpenAlex-only (synthetic ID: {synthetic_id[:12]}…)")
         return paper
 
     @staticmethod
