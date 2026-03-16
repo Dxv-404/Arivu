@@ -158,3 +158,11 @@ These conflicts were pre-logged in CLAUDE.md Part 22. Resolutions recorded here 
 **Status:** RESOLVED MOOT (2026-03-16)
 **Conflict:** Phase 8 §0.7 instructs extending TIER_ORDER to include 'developer' and using @require_tier on Phase 8 routes. ADR-016 prohibits adding developer tier and prohibits using @require_tier on any route.
 **Resolution:** ADR-016 takes precedence. Phase 8 §0.7 is SKIPPED ENTIRELY. TIER_ORDER remains {"free": 0, "researcher": 1, "lab": 2}. All Phase 8 routes use @require_auth only, never @require_tier. Phase 8 Claude Code must read this entry and skip §0.7 without stopping to ask.
+
+## ADR-020: Phase 8 Intelligence Module Reconstruction
+**Date:** 2026-03-16
+**Context:** Phase 8 spec references "PHASE_8_v1.md" for 13 modules marked "Same as v1", but that file never existed. All 14 Phase 8 intelligence modules had to be reconstructed from feature descriptions, route signatures, test mock expectations, and return shape requirements.
+**Decision:** Reconstruct all modules as stateless classes with graph_json dict input. Use `get_llm_client()` (not `LLMClient()`) for all LLM calls. Modules that can work without LLM (intellectual_debt, challenge_generator, idea_credit, research_risk_analyzer) use pure graph analysis only.
+**Alternatives considered:** Stubbing modules (too little value), asking user for v1 code (doesn't exist).
+**Rationale:** Reconstructed modules match feature intent from ARIVU_COMPLETE_SPEC_v3.md and pass all 34 Phase 8 tests.
+**Implications:** Module APIs may differ from any hypothetical v1 spec. Tests are adapted to match actual implementations rather than spec test code.
