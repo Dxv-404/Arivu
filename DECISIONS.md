@@ -30,6 +30,9 @@ If you are about to decide something not recorded here, add it first.
 
 | 20 | Dockerfile Debian Trixie | libgdk-pixbuf-xlib-2.0-0 (NOT libgdk-pixbuf2.0-0) | Package renamed in Debian Trixie; old name causes Koyeb build failure |
 | 21 | Billing model | All features free; billing.py dormant | ADR-016 — all features accessible to authenticated users; Stripe code retained for portfolio |
+| 22 | graph_id format | SHA256(seed_paper_id + "_" + session_id)[:32] stable hash | ADR-017 — Phase 8 caching, live subscriptions, graph memory all key on stable graph identity |
+| 23 | shared_graphs schema | Full 12-column spec per PHASE_7.md §6.1 | ADR-018 — view_mode, seed_title, view_state required for share page to restore correct view |
+| 24 | Citation formats | 7 formats: APA, MLA, Chicago, BibTeX, IEEE, Harvard, Vancouver | ADR-019 — Vancouver required for biomedical researchers; BibTeX kept from Phase 5 export system |
 
 ## ADR-014: Production database
 **Date:** 2026-03-15
@@ -136,3 +139,22 @@ If you are about to decide something not recorded here, add it first.
 **Alternatives considered:** Replacing BibTeX with Vancouver (would break existing exports).
 **Rationale:** Additive change, no removal. Vancouver uses standard biomedical formatting (Surname AB, up to 6 authors then et al.).
 **Implications:** SUPPORTED_STYLES tuple grows from 6 to 7. All all_styles=True API calls now include Vancouver. Frontend shows 7 style buttons.
+
+## Resolved Conflicts
+
+These conflicts were pre-logged in CLAUDE.md Part 22. Resolutions recorded here so Phase 8 Claude Code does not halt on them.
+
+### CONFLICT-003 — retractions vs retraction_watch table name
+**Status:** RESOLVED (2026-03-16)
+**Conflict:** Phase 8 §0.1 uses `SELECT COUNT(*) FROM retractions`. CLAUDE.md Part 6.8 and Part 21 prohibit using `retractions` — canonical name is `retraction_watch`.
+**Resolution:** `retraction_watch` is the correct table name. Phase 8 §0.1 contains a typo. All Phase 8 code must use `retraction_watch`. This is pre-resolved here so Phase 8 does not halt.
+
+### CONFLICT-007 — Stripe and Resend version mismatch
+**Status:** RESOLVED MOOT (2026-03-16)
+**Conflict:** Phase 1 requirements.txt had stripe==9.9.0 and resend==0.7.2. Phase 6 §0.4 specified stripe==8.11.0 and resend==2.3.0.
+**Resolution:** Moot. billing.py is permanently dormant per ADR-016. Stripe is never activated. The version in requirements.txt is frozen as-is. Resend is used for auth emails only and the installed version works correctly.
+
+### CONFLICT-014 — Phase 8 §0.7 TIER_ORDER vs ADR-016
+**Status:** RESOLVED MOOT (2026-03-16)
+**Conflict:** Phase 8 §0.7 instructs extending TIER_ORDER to include 'developer' and using @require_tier on Phase 8 routes. ADR-016 prohibits adding developer tier and prohibits using @require_tier on any route.
+**Resolution:** ADR-016 takes precedence. Phase 8 §0.7 is SKIPPED ENTIRELY. TIER_ORDER remains {"free": 0, "researcher": 1, "lab": 2}. All Phase 8 routes use @require_auth only, never @require_tier. Phase 8 Claude Code must read this entry and skip §0.7 without stopping to ask.

@@ -1,7 +1,7 @@
 # Arivu — Active Context
 
 ## Current Phase
-Phase 7 — Temporal Intelligence, Workflow Tools & Public API (COMPLETE — post-implementation fixes applied)
+Phase 8 — Final Intelligence Layer, Trust Features, Live Mode & v1.0
 
 ## Phases
 ### Completed
@@ -24,6 +24,7 @@ Phase 7 — Temporal Intelligence, Workflow Tools & Public API (COMPLETE — pos
 | Database (Neon) | ep-young-haze-a1qrxgk6-pooler.ap-southeast-1.aws.neon.tech |
 | Custom Domain | pending DNS setup (arivu.app) |
 | Public API | /v1/ blueprint — API key auth via `api_keys` table |
+| /v1/ API Base | https://arivu.app/v1/ |
 
 ## Architecture Notes
 - DB pool: 2 workers × DB_POOL_MAX=4 = 8 connections (Neon free cap = 10)
@@ -40,6 +41,10 @@ Phase 7 — Temporal Intelligence, Workflow Tools & Public API (COMPLETE — pos
 - shared_graphs has full 12-column schema per PHASE_7.md spec (ADR-018)
 - CitationGenerator supports 7 formats: APA, MLA, Chicago, BibTeX, IEEE, Harvard, Vancouver (ADR-019)
 - R2Client.upload_bytes() alias added for Phase 8 forward compatibility
+- Time Machine results cached in time_machine_cache table (7-day TTL)
+- Vocabulary snapshots cached per-year per-graph in vocabulary_snapshots table
+- Public REST API at /v1/ — API keys available to all authenticated users (no tier restriction per ADR-016)
+- Koyeb weekly digest schedule: 0 8 * * 1 (Monday 08:00 UTC) — add as scheduled job in Koyeb dashboard before v1.0 launch
 
 ## Last Session Summary
 Phase 7 post-implementation fixes applied. All spec compliance gaps identified in audit and resolved:
@@ -64,7 +69,6 @@ Phase 7 post-implementation fixes applied. All spec compliance gaps identified i
 - ground_truth_eval.py needs ≥20 pairs before running eval (currently has 5 seed pairs)
 - WeasyPrint requires libcairo2 on the system — verify Dockerfile includes it
 - ENABLE_AUTH should be set to true in Koyeb only after end-to-end testing
-- Phase 7 migration needs to be run against Neon production database
 
 ## Environment
 - DATABASE_URL: postgresql://arivu:localdev@localhost:5433/arivu?sslmode=disable (local)
@@ -73,3 +77,5 @@ Phase 7 post-implementation fixes applied. All spec compliance gaps identified i
 - Docker container: arivu-db (pgvector/pgvector:pg16, port 5433)
 - Python environment: .venv (Python 3.10.11)
 - Deployed to Koyeb: https://supreme-dorthea-devkrishna-a8d9791a.koyeb.app
+- Koyeb weekly digest cron not yet configured — add scheduled job: python scripts/weekly_digest.py at schedule 0 8 * * 1 (Monday 08:00 UTC) in Koyeb dashboard
+- Phase 7 §36 done-when criteria 3–13 (endpoint runtime tests) not yet verified — requires ENABLE_AUTH=true and a real built graph in the DB. Run before enabling ENABLE_AUTH=true in Koyeb production.
