@@ -396,12 +396,33 @@ class AncestryGraph:
         # ── Step 6: Store node references for downstream use ─────────────
         self.nodes = all_papers
 
-        # ── Step 7: Export and cache ──────────────────────────────────────
+        # ── Step 7: Export, compute pruning impacts, then cache ──────────
         await self._emit("finalizing", "Building graph export…")
         graph_json = self._export_to_json(seed_paper, all_papers)
         build_time = time.time() - build_start
 
-        # Cache to R2 — use stable graph_id for the key
+        # Compute pruning impacts BEFORE caching to R2.
+        # Previously R2 was written before this step, so cached graphs had
+        # pruning_impact=0 for every node.  Moving it here ensures the R2
+        # cache contains the fully enriched graph JSON.
+        from backend.pruning import compute_all_pruning_impacts
+        try:
+            pruning_impacts = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
+            self._pruning_impacts = pruning_impacts
+            impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in pruning_impacts.items()}
+            if impact_lookup:
+                sorted_vals = sorted(impact_lookup.values(), reverse=True)
+                threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
+            else:
+                threshold = 0
+            for node in graph_json.get("nodes", []):
+                cc = impact_lookup.get(node["id"], 0)
+                node["pruning_impact"] = cc
+                node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
+        except Exception as exc:
+            logger.warning(f"Pruning impact computation failed (non-fatal): {exc}")
+
+        # Cache to R2 — NOW with pruning impacts already populated
         from backend.r2_client import R2Client
         from backend.config import config as _config
         r2 = R2Client(_config)
@@ -444,26 +465,6 @@ class AncestryGraph:
                 round(build_time, 2),
             ),
         )
-
-        # ── Step 8: Compute pruning impacts (lightweight) before emitting done ──
-        # Pruning impacts need to be in the graph JSON the client receives.
-        # This is a pure-graph traversal — no DB calls, fast on NetworkX.
-        from backend.pruning import compute_all_pruning_impacts
-        try:
-            pruning_impacts = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
-            self._pruning_impacts = pruning_impacts
-            impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in pruning_impacts.items()}
-            if impact_lookup:
-                sorted_vals = sorted(impact_lookup.values(), reverse=True)
-                threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
-            else:
-                threshold = 0
-            for node in graph_json.get("nodes", []):
-                cc = impact_lookup.get(node["id"], 0)
-                node["pruning_impact"] = cc
-                node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
-        except Exception as exc:
-            logger.warning(f"Pruning impact computation failed (non-fatal): {exc}")
 
         # Emit "done" with fully enriched graph JSON (including pruning impacts)
         await self._emit("done", "Graph ready.", graph=graph_json)

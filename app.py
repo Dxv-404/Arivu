@@ -522,6 +522,33 @@ def create_app():
                 except Exception as exc:
                     logger.warning(f"Failed to attach panel data to cached graph: {exc}")
 
+                # Enrich pruning impacts from leaderboard for old cached graphs.
+                # Graphs cached before the R2-write-ordering fix have all
+                # pruning_impact=0. The leaderboard (stored in DB) has the
+                # correct collapse_count for the top-N most impactful nodes.
+                # This covers bottleneck nodes; non-leaderboard nodes genuinely
+                # have 0 or near-0 impact (leaf nodes, no dependents).
+                try:
+                    nodes = graph_data.get("nodes", [])
+                    all_zero = nodes and all(n.get("pruning_impact", 0) == 0 for n in nodes[:50])
+                    lb_data = graph_data.get("leaderboard")
+                    if all_zero and lb_data and len(nodes) > 1:
+                        impact_map = {
+                            entry["paper_id"]: entry.get("collapse_count", 0)
+                            for entry in lb_data
+                            if isinstance(entry, dict) and "paper_id" in entry
+                        }
+                        if impact_map:
+                            vals = sorted(impact_map.values(), reverse=True)
+                            threshold = vals[max(0, len(vals) // 5)] if vals else 0
+                            for node in nodes:
+                                cc = impact_map.get(node.get("id"), 0)
+                                if cc > 0:
+                                    node["pruning_impact"] = cc
+                                    node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
+                except Exception as exc:
+                    logger.warning(f"Failed to enrich pruning impacts on cached graph: {exc}")
+
                 # Update last_accessed for TTL tracking
                 try:
                     db.execute(
