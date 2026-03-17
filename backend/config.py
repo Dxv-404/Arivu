@@ -70,8 +70,13 @@ class Config:
     NLP_WORKER_TIMEOUT  = int(os.environ.get("NLP_WORKER_TIMEOUT", "90"))
 
     # ── NLP Pipeline Tuning ───────────────────────────────────────
-    NLP_SIMILARITY_THRESHOLD = float(os.environ.get("NLP_SIMILARITY_THRESHOLD", "0.25"))
-    NLP_BATCH_SIZE      = int(os.environ.get("NLP_BATCH_SIZE", "5"))
+    # Threshold: edges below this similarity → auto "incidental" (no Groq call).
+    # Raised from spec default 0.25 → 0.35 to reduce Stage 2 Groq calls.
+    # Edges in the 0.25–0.35 range rarely produce meaningful classifications.
+    NLP_SIMILARITY_THRESHOLD = float(os.environ.get("NLP_SIMILARITY_THRESHOLD", "0.35"))
+    # Batch size: edges per Groq LLM call in Stage 2.
+    # Raised from spec default 5 → 15 to cut Groq call count by ~3×.
+    NLP_BATCH_SIZE      = int(os.environ.get("NLP_BATCH_SIZE", "15"))
 
     # ── Graph Building ────────────────────────────────────────────
     MAX_GRAPH_DEPTH     = int(os.environ.get("MAX_GRAPH_DEPTH", "2"))
