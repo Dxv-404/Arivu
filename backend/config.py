@@ -75,8 +75,11 @@ class Config:
     # Edges in the 0.25–0.35 range rarely produce meaningful classifications.
     NLP_SIMILARITY_THRESHOLD = float(os.environ.get("NLP_SIMILARITY_THRESHOLD", "0.35"))
     # Batch size: edges per Groq LLM call in Stage 2.
-    # Raised from spec default 5 → 15 to cut Groq call count by ~3×.
-    NLP_BATCH_SIZE      = int(os.environ.get("NLP_BATCH_SIZE", "15"))
+    # Raised from spec default 5 → 10 to cut Groq call count by ~2×.
+    # Limited to 10 (not 15) because: (a) max_tokens must scale with batch
+    # size to avoid truncated JSON responses, (b) Groq free-tier TPM limits
+    # constrain throughput regardless of batch size.
+    NLP_BATCH_SIZE      = int(os.environ.get("NLP_BATCH_SIZE", "10"))
 
     # ── Graph Building ────────────────────────────────────────────
     MAX_GRAPH_DEPTH     = int(os.environ.get("MAX_GRAPH_DEPTH", "2"))

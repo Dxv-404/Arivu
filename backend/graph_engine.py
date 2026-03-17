@@ -740,7 +740,7 @@ class AncestryGraph:
 
         Node fields:  id, title, authors, year, citation_count, fields_of_study,
                       abstract_preview, url, doi, is_seed, is_root, depth,
-                      pruning_impact (0 placeholder — computed in Phase 3),
+                      pruning_impact (initialized 0, overwritten by _build() Step 7),
                       is_bottleneck, text_tier, is_retracted, language
         Edge fields:  source, target, similarity_score, citing_sentence,
                       cited_sentence, mutation_type, citation_intent,
@@ -765,8 +765,8 @@ class AncestryGraph:
                 "is_seed":          paper.paper_id == seed_paper.paper_id,
                 "is_root":          self.graph.out_degree(paper_id) == 0,
                 "depth":            node_data.get("depth", -1),
-                "pruning_impact":   0,           # Phase 3
-                "is_bottleneck":    False,        # Phase 3
+                "pruning_impact":   0,           # Overwritten by _build() Step 7 after pruning computation
+                "is_bottleneck":    False,        # Overwritten by _build() Step 7 bottleneck detection
                 "text_tier":        paper.text_tier,
                 "is_retracted":     paper.is_retracted,
                 "language":         paper.language,

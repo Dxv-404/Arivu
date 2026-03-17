@@ -462,13 +462,18 @@ Return ONLY valid JSON — no markdown, no preamble:
                 timeout=_httpx.Timeout(30.0, connect=5.0),
                 headers={"User-Agent": "Arivu/1.0"},
             ) as groq_client:
+                # Scale max_tokens with batch size: ~100 tokens per edge
+                # classification (edge_id + 4 fields + evidence sentence),
+                # plus ~200 tokens for JSON structure overhead.
+                # At batch_size=5: 700 tokens. At 10: 1200. At 15: 1700.
+                dynamic_max_tokens = min(200 + len(batch) * 100, 2000)
                 resp = await groq_client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
                     json={
                         "model": config.GROQ_FAST_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 800,
+                        "max_tokens": dynamic_max_tokens,
                         "temperature": 0.1,
                     },
                 )
