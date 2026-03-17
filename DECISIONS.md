@@ -179,3 +179,12 @@ commit messages. Multi-session execution used different wording.
   [v1.0] Arivu v1.0 complete — all phases 1-8 done
 **Decision:** Deviation accepted. Functional compliance achieved.
 Commit message wording is a process requirement only, not functional.
+
+## ADR-021: NLP build time optimization — threshold and batch size
+**Date:** 2026-03-17
+**Context:** Graph builds on Koyeb take 5-10 minutes for large papers. Stage 2 (Groq LLM classification) is the bottleneck — hundreds of edges × individual API calls with rate limiting.
+**Decision:** Raise `NLP_SIMILARITY_THRESHOLD` from spec-default 0.25 to 0.35; raise `NLP_BATCH_SIZE` from 5 to 10. Dynamic `max_tokens` scales with batch size.
+**Alternatives considered:** (a) Keep spec defaults — slow builds. (b) Batch size 15 — Groq response truncation at `max_tokens=800` (rejected by pessimistic debugger). (c) Threshold 0.30 — marginal improvement.
+**Rationale:** Edges in the 0.25–0.35 similarity range rarely produce meaningful LLM classifications — they almost always resolve to "incidental". Skipping them saves ~30% of Groq calls. Larger batches reduce per-call overhead. The 0.35 threshold matches the confidence tier LOW boundary (≥0.35), creating a clean conceptual alignment.
+**Spec deviation:** CLAUDE.md Part 9 explicitly states NLP_SIMILARITY_THRESHOLD default is 0.25. This is an intentional user-requested performance optimization. Logged here per Part 3.3 drift detection protocol.
+**Implications:** Edges with similarity 0.25–0.35 are auto-classified as "incidental" without LLM review. Classification quality for these borderline edges is lower, but they were unlikely to receive meaningful classifications anyway.

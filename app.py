@@ -530,7 +530,7 @@ def create_app():
                 # have 0 or near-0 impact (leaf nodes, no dependents).
                 try:
                     nodes = graph_data.get("nodes", [])
-                    all_zero = nodes and all(n.get("pruning_impact", 0) == 0 for n in nodes[:50])
+                    all_zero = nodes and all(n.get("pruning_impact", 0) == 0 for n in nodes)
                     lb_data = graph_data.get("leaderboard")
                     if all_zero and lb_data and len(nodes) > 1:
                         impact_map = {
