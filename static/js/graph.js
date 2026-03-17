@@ -79,19 +79,96 @@ class ArivuGraph {
   }
 
   _initialRender() {
-    const seed = this.allNodes.find(n => n.is_seed);
-    const directRefs = this.allNodes
-      .filter(n => n.depth === 1)
-      .sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0))
-      .slice(0, 49);
+    // Show ALL nodes upfront — the full citation ancestry
+    this.allNodes.forEach(n => this.visibleNodeIds.add(n.id));
 
-    const initial = [seed, ...directRefs].filter(Boolean);
-    initial.forEach(n => this.visibleNodeIds.add(n.id));
+    // Adapt force parameters for the graph size
+    this._tuneSimulation(this.allNodes.length);
 
     this._render();
 
-    // Offer expand after layout settles
-    setTimeout(() => this._offerExpandOption(), 3500);
+    // Auto-zoom to fit entire graph after layout stabilizes
+    setTimeout(() => this._zoomToFit(), 2500);
+  }
+
+  _tuneSimulation(nodeCount) {
+    const { width, height } = this.container.getBoundingClientRect();
+
+    if (nodeCount > 200) {
+      // Large graph: strong repulsion + radial depth rings for structure
+      this.simulation
+        .force('charge', d3.forceManyBody()
+          .strength(d => -180 - Math.log((d.citation_count || 1) + 1) * 15)
+          .distanceMax(800)
+        )
+        .force('link', d3.forceLink()
+          .id(d => d.id)
+          .distance(d => 90 + (1 - (d.similarity_score || 0.5)) * 110)
+          .strength(0.3)
+        )
+        .force('center', d3.forceCenter(width / 2, height / 2).strength(0.03))
+        .force('collision', d3.forceCollide()
+          .radius(d => this._nodeRadius(d) + 3)
+          .strength(0.6)
+        )
+        .force('radial', d3.forceRadial(
+          d => (d.depth || 0) * 180 + (d.is_seed ? 0 : 60),
+          width / 2, height / 2
+        ).strength(0.35))
+        .alphaDecay(0.012)
+        .velocityDecay(0.35);
+
+    } else if (nodeCount > 60) {
+      // Medium graph: moderate tuning
+      this.simulation
+        .force('charge', d3.forceManyBody()
+          .strength(d => -120 - Math.log((d.citation_count || 1) + 1) * 12)
+        )
+        .force('link', d3.forceLink()
+          .id(d => d.id)
+          .distance(d => 75 + (1 - (d.similarity_score || 0.5)) * 100)
+        )
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide()
+          .radius(d => this._nodeRadius(d) + 5)
+        )
+        .force('radial', d3.forceRadial(
+          d => (d.depth || 0) * 150,
+          width / 2, height / 2
+        ).strength(0.2))
+        .alphaDecay(0.018)
+        .velocityDecay(0.38);
+    }
+    // Small graphs (<= 60 nodes): keep the default init() forces
+  }
+
+  _zoomToFit() {
+    const nodes = this.allNodes.filter(n => this.visibleNodeIds.has(n.id));
+    if (nodes.length === 0) return;
+
+    const xs = nodes.map(n => n.x || 0);
+    const ys = nodes.map(n => n.y || 0);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const padding = 80;
+
+    const { width, height } = this.container.getBoundingClientRect();
+    const graphWidth = (maxX - minX) + 2 * padding;
+    const graphHeight = (maxY - minY) + 2 * padding;
+
+    if (graphWidth <= 0 || graphHeight <= 0) return;
+
+    const scale = Math.min(width / graphWidth, height / graphHeight, 1.5);
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    this.svg.transition().duration(1000).ease(d3.easeCubicOut).call(
+      this.zoom.transform,
+      d3.zoomIdentity
+        .translate(width / 2, height / 2)
+        .scale(scale)
+        .translate(-centerX, -centerY)
+    );
   }
 
   _render() {
