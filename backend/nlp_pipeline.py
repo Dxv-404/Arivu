@@ -68,7 +68,7 @@ class InheritanceDetector:
             self._http = httpx.AsyncClient(
                 timeout=httpx.Timeout(config.NLP_WORKER_TIMEOUT, connect=5.0),
                 headers={
-                    "Authorization": f"Bearer {config.NLP_WORKER_SECRET}",
+                    "X-API-Key": config.NLP_WORKER_SECRET,
                     "User-Agent": "Arivu/1.0",
                 },
             )
@@ -93,6 +93,23 @@ class InheritanceDetector:
         Returns one EdgeAnalysis per edge. Low-similarity edges get
         mutation_type="incidental" with llm_classified=False.
         """
+        try:
+            return await self._analyze_edges_inner(edges, all_papers, graph, progress_callback)
+        finally:
+            # Close the shared httpx client to release TCP connections and memory.
+            # Prevents accumulation across builds on the 512MB Koyeb instance.
+            if self._http and not self._http.is_closed:
+                await self._http.aclose()
+                self._http = None
+
+    async def _analyze_edges_inner(
+        self,
+        edges: list[tuple[str, str]],
+        all_papers: dict[str, Paper],
+        graph: nx.DiGraph,
+        progress_callback=None,
+    ) -> list[EdgeAnalysis]:
+        """Inner implementation of analyze_edges (wrapped with cleanup in analyze_edges)."""
         results: list[EdgeAnalysis] = []
 
         # Check cache first — batch lookup instead of N individual queries.
@@ -175,7 +192,7 @@ class InheritanceDetector:
                     "analyzing",
                     f"Stage 2: Classifying {len(candidates)} edges via LLM…"
                 )
-            await self._run_stage2_llm(candidates)
+            await self._run_stage2_llm(candidates, progress_callback=progress_callback)
         else:
             for r in candidates:
                 r["mutation_type"] = "incidental"
@@ -209,11 +226,16 @@ class InheritanceDetector:
         for r in all_stage_results:
             self._run_stage3(r, graph, pagerank_scores)
 
-        # Build EdgeAnalysis objects and cache them
+        # Build EdgeAnalysis objects and batch-cache them
+        new_edges: list[EdgeAnalysis] = []
         for r in all_stage_results:
             ea = self._build_edge_analysis(r, all_papers)
-            self._save_cached_analysis(ea)
+            new_edges.append(ea)
             results.append(ea)
+
+        # Batch upsert — one DB round trip instead of N individual calls.
+        # This prevents connection pool exhaustion that kills the SSE worker.
+        self._save_cached_analysis_batch(new_edges)
 
         return results
 
@@ -222,14 +244,45 @@ class InheritanceDetector:
     async def _run_stage1_all(
         self, edges: list[tuple[str, str]], all_papers: dict[str, Paper]
     ) -> list[dict]:
-        """Run Stage 1 on all edges concurrently (bounded concurrency)."""
-        sem = asyncio.Semaphore(10)   # Max 10 concurrent NLP worker calls
+        """Run Stage 1 on all edges with bounded concurrency.
+
+        Uses Semaphore(3) — HuggingFace CPU tier is single-threaded, so
+        higher concurrency just queues requests on the server side.
+        Processes in chunks of 30 to bound memory and allow progress reporting.
+        """
+        sem = asyncio.Semaphore(3)   # HF CPU is single-threaded; 3 is generous
+        results: list[dict] = []
 
         async def analyze_one(edge: tuple[str, str]) -> dict:
             async with sem:
                 return await self._stage1_similarity(edge[0], edge[1], all_papers)
 
-        return await asyncio.gather(*[analyze_one(e) for e in edges])
+        # Process in chunks to bound coroutine memory
+        chunk_size = 30
+        for i in range(0, len(edges), chunk_size):
+            chunk = edges[i:i + chunk_size]
+            chunk_results = await asyncio.gather(
+                *[analyze_one(e) for e in chunk],
+                return_exceptions=True,
+            )
+            for j, r in enumerate(chunk_results):
+                if isinstance(r, Exception):
+                    edge = chunk[j]
+                    logger.warning(f"Stage 1 edge analysis failed for {edge[0][:8]}→{edge[1][:8]}: {r}")
+                    # Return a zero-similarity fallback with the real edge identity
+                    results.append({
+                        "edge_id": f"{edge[0]}:{edge[1]}",
+                        "citing_paper_id": edge[0],
+                        "cited_paper_id": edge[1],
+                        "similarity_score": 0.0, "citing_sentence": None,
+                        "cited_sentence": None, "citing_text_source": "none",
+                        "cited_text_source": "none", "comparable": False,
+                        "signals_used": [],
+                    })
+                else:
+                    results.append(r)
+
+        return results
 
     async def _stage1_similarity(
         self, citing_id: str, cited_id: str, all_papers: dict[str, Paper]
@@ -315,14 +368,22 @@ class InheritanceDetector:
 
     # ─── Stage 2: LLM Classification ─────────────────────────────────────────
 
-    async def _run_stage2_llm(self, edges: list[dict]) -> None:
+    async def _run_stage2_llm(self, edges: list[dict], progress_callback=None) -> None:
         """
         Classify edges in batches of NLP_BATCH_SIZE via Groq.
         Mutates each edge dict in-place with mutation_type, citation_intent, etc.
+        Emits progress events every 5 batches to keep SSE stream alive.
         """
         batch_size = config.NLP_BATCH_SIZE   # default 5
+        total_batches = (len(edges) + batch_size - 1) // batch_size
         for i in range(0, len(edges), batch_size):
             batch = edges[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            if progress_callback and batch_num % 5 == 0:
+                await progress_callback(
+                    "analyzing",
+                    f"Stage 2: LLM classified {i}/{len(edges)} edges ({batch_num}/{total_batches} batches)…"
+                )
             await self._classify_batch(batch)
 
     async def _classify_batch(self, batch: list[dict]) -> None:
@@ -358,6 +419,7 @@ Return ONLY valid JSON — no markdown, no preamble:
 
         await coordinated_rate_limiter.throttle("groq")
         try:
+            import httpx as _httpx
             client = await self._client()
             resp = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -368,6 +430,7 @@ Return ONLY valid JSON — no markdown, no preamble:
                     "max_tokens": 800,
                     "temperature": 0.1,
                 },
+                timeout=_httpx.Timeout(30.0, connect=5.0),  # Groq is fast; don't use NLP_WORKER_TIMEOUT (90s)
             )
             if resp.status_code == 429:
                 await coordinated_rate_limiter.record_rate_limit("groq", 60)
@@ -583,6 +646,60 @@ Return ONLY valid JSON — no markdown, no preamble:
             )
         except Exception as e:
             logger.debug(f"Cache save failed for edge {ea.edge_id}: {e}")
+
+    @staticmethod
+    def _save_cached_analysis_batch(edges: list[EdgeAnalysis]) -> None:
+        """Batch upsert EdgeAnalysis rows — one DB round trip instead of N.
+
+        This prevents connection pool exhaustion during post-NLP caching, which
+        was the root cause of SSE worker death on Koyeb (DB_POOL_MAX=4, N=416+
+        individual calls monopolize all connections, blocking SSE keepalives).
+        """
+        if not edges:
+            return
+        import json as _json
+        rows = []
+        for ea in edges:
+            rows.append((
+                ea.edge_id, ea.citing_paper_id, ea.cited_paper_id,
+                ea.similarity_score, ea.citing_sentence, ea.cited_sentence,
+                ea.citing_text_source, ea.cited_text_source, ea.comparable,
+                ea.mutation_type, ea.mutation_confidence, ea.mutation_evidence,
+                ea.citation_intent, ea.base_confidence,
+                _json.dumps(ea.signals_used),
+                ea.llm_classified, ea.flagged_by_users, ea.model_version,
+            ))
+        try:
+            db.executemany(
+                """
+                INSERT INTO edge_analysis (
+                    edge_id, citing_paper_id, cited_paper_id,
+                    similarity_score, citing_sentence, cited_sentence,
+                    citing_text_source, cited_text_source, comparable,
+                    mutation_type, mutation_confidence, mutation_evidence,
+                    citation_intent, base_confidence, signals_used,
+                    llm_classified, flagged_by_users, model_version,
+                    computed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW()
+                )
+                ON CONFLICT (edge_id) DO UPDATE SET
+                    similarity_score   = EXCLUDED.similarity_score,
+                    mutation_type      = EXCLUDED.mutation_type,
+                    mutation_confidence = EXCLUDED.mutation_confidence,
+                    base_confidence    = EXCLUDED.base_confidence,
+                    llm_classified     = EXCLUDED.llm_classified,
+                    model_version      = EXCLUDED.model_version,
+                    computed_at        = NOW()
+                """,
+                rows,
+            )
+            logger.info(f"Batch-cached {len(rows)} edge analyses")
+        except Exception as e:
+            logger.warning(f"Batch edge cache failed, falling back to individual: {e}")
+            for ea in edges:
+                InheritanceDetector._save_cached_analysis(ea)
 
     # ─── Phase 3: Full-text enrichment ─────────────────────────────────────
 

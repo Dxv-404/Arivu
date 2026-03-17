@@ -1,1 +1,1 @@
-web: gunicorn "app:create_app()" --workers 2 --worker-class sync --bind 0.0.0.0:$PORT --timeout 120
+web: gunicorn "app:create_app()" --workers 2 --worker-class gthread --threads 4 --bind 0.0.0.0:$PORT --timeout 300

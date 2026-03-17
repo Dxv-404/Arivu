@@ -445,10 +445,33 @@ class AncestryGraph:
             ),
         )
 
-        # ── Step 8: Post-build bookkeeping ────────────────────────────────
-        # Compute leaderboard, DNA, diversity; link session → graph
-        # Re-fetch session_id for bookkeeping (already computed above but may
-        # have changed scope after embedding/NLP steps)
+        # ── Step 8: Compute pruning impacts (lightweight) before emitting done ──
+        # Pruning impacts need to be in the graph JSON the client receives.
+        # This is a pure-graph traversal — no DB calls, fast on NetworkX.
+        from backend.pruning import compute_all_pruning_impacts
+        try:
+            pruning_impacts = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
+            self._pruning_impacts = pruning_impacts
+            impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in pruning_impacts.items()}
+            if impact_lookup:
+                sorted_vals = sorted(impact_lookup.values(), reverse=True)
+                threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
+            else:
+                threshold = 0
+            for node in graph_json.get("nodes", []):
+                cc = impact_lookup.get(node["id"], 0)
+                node["pruning_impact"] = cc
+                node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
+        except Exception as exc:
+            logger.warning(f"Pruning impact computation failed (non-fatal): {exc}")
+
+        # Emit "done" with fully enriched graph JSON (including pruning impacts)
+        await self._emit("done", "Graph ready.", graph=graph_json)
+
+        # ── Step 9: Post-build bookkeeping (runs AFTER done, non-blocking) ────
+        # Heavy operations (DB writes, DNA/diversity, researcher profiles) happen
+        # after the client has the graph. This prevents pool exhaustion from
+        # killing the SSE worker during Koyeb's gunicorn timeout window.
         try:
             job_row2 = db.fetchone(
                 "SELECT session_id FROM build_jobs WHERE job_id = %s",
@@ -460,43 +483,6 @@ class AncestryGraph:
 
         self._on_graph_complete(self._graph_id, session_id_bk)
 
-        # Enrich node pruning_impact and is_bottleneck from precomputed data
-        try:
-            impacts = getattr(self, "_pruning_impacts", {})
-            if impacts:
-                impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in impacts.items()}
-                # Top 20% of nodes by impact are bottlenecks
-                if impact_lookup:
-                    sorted_vals = sorted(impact_lookup.values(), reverse=True)
-                    threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
-                for node in graph_json.get("nodes", []):
-                    cc = impact_lookup.get(node["id"], 0)
-                    node["pruning_impact"] = cc
-                    node["is_bottleneck"] = cc >= threshold if threshold > 0 else False
-        except Exception as exc:
-            logger.warning(f"Failed to enrich node pruning impacts: {exc}")
-
-        # Attach panel data (DNA, diversity, leaderboard) to graph JSON
-        # These were computed in _on_graph_complete and stored in DB.
-        try:
-            panel_row = db.fetchone(
-                "SELECT leaderboard_json, dna_json, diversity_json FROM graphs WHERE graph_id = %s",
-                (self._graph_id,),
-            )
-            if panel_row:
-                if panel_row.get("leaderboard_json"):
-                    lb = panel_row["leaderboard_json"]
-                    graph_json["leaderboard"] = lb if isinstance(lb, list) else json.loads(lb)
-                if panel_row.get("dna_json"):
-                    dna = panel_row["dna_json"]
-                    graph_json["dna_profile"] = dna if isinstance(dna, dict) else json.loads(dna)
-                if panel_row.get("diversity_json"):
-                    div = panel_row["diversity_json"]
-                    graph_json["diversity_score"] = div if isinstance(div, dict) else json.loads(div)
-        except Exception as exc:
-            logger.warning(f"Failed to attach panel data to graph JSON: {exc}")
-
-        await self._emit("done", "Graph ready.", graph=graph_json)
         return graph_json
 
     # ─── Post-build bookkeeping ──────────────────────────────────────────────
@@ -509,8 +495,8 @@ class AncestryGraph:
         3. Compute DNA profile and store in graphs table
         4. Compute diversity score and store in graphs table
 
-        Called after NLP analysis finishes, before streaming 'done' event.
-        All failures are logged and swallowed — graph is still usable.
+        Called AFTER streaming 'done' event so the client gets the graph
+        immediately.  All failures are logged and swallowed — graph is still usable.
         """
         from backend.pruning import compute_all_pruning_impacts
 
@@ -528,11 +514,10 @@ class AncestryGraph:
             except Exception as exc:
                 logger.warning(f"session_graphs insert failed: {exc}")
 
-        # 2. Leaderboard — precompute pruning impact for every node
+        # 2. Leaderboard — reuse pruning impacts from _build() if available
         try:
-            leaderboard = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
-            # Store raw impacts for enriching graph_json nodes later
-            self._pruning_impacts = leaderboard
+            leaderboard = getattr(self, '_pruning_impacts', None) or \
+                          compute_all_pruning_impacts(self.graph, self.seed_paper_id)
             sorted_leaderboard = sorted(
                 [{"paper_id": k, **v} for k, v in leaderboard.items()],
                 key=lambda x: x["collapse_count"],
@@ -554,22 +539,28 @@ class AncestryGraph:
         except Exception as exc:
             logger.warning(f"leaderboard computation failed: {exc}")
 
-        # Phase 8: seed researcher_profiles with author stubs
+        # Phase 8: seed researcher_profiles with author stubs (batch insert)
         try:
+            profile_rows = []
+            seen_author_ids = set()
             for paper_id, paper in self.nodes.items():
                 for author_name in (getattr(paper, "authors", []) or []):
                     if not author_name or not author_name.strip():
                         continue
-                    # Use name-based hash as surrogate author_id until full profile build
                     author_id = hashlib.sha256(author_name.strip().lower().encode()).hexdigest()[:32]
-                    db.execute(
-                        """
-                        INSERT INTO researcher_profiles (author_id, display_name)
-                        VALUES (%s, %s)
-                        ON CONFLICT (author_id) DO NOTHING
-                        """,
-                        (author_id, author_name.strip()),
-                    )
+                    if author_id not in seen_author_ids:
+                        seen_author_ids.add(author_id)
+                        profile_rows.append((author_id, author_name.strip()))
+            if profile_rows:
+                db.executemany(
+                    """
+                    INSERT INTO researcher_profiles (author_id, display_name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (author_id) DO NOTHING
+                    """,
+                    profile_rows,
+                )
+                logger.info(f"Seeded {len(profile_rows)} researcher profiles (batch)")
         except Exception as exc:
             logger.warning(f"researcher_profiles seeding failed: {exc}")
 
@@ -646,7 +637,7 @@ class AncestryGraph:
         try:
             async with _httpx.AsyncClient(
                 timeout=_httpx.Timeout(config.NLP_WORKER_TIMEOUT, connect=5.0),
-                headers={"Authorization": f"Bearer {config.NLP_WORKER_SECRET}"},
+                headers={"X-API-Key": config.NLP_WORKER_SECRET},
             ) as client:
                 for i in range(0, len(texts), chunk_size):
                     chunk = texts[i:i + chunk_size]

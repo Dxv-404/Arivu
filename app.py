@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+import threading
 from threading import Thread
 from typing import Optional
 
@@ -190,21 +191,26 @@ def add_security_headers(response):
 
 _NLP_HEALTH: dict = {"ok": False, "checked_at": 0.0}
 _NLP_HEALTH_TTL: float = 30.0
+_NLP_HEALTH_LOCK = threading.Lock()
 
 
 def _nlp_worker_reachable() -> bool:
     """Check NLP worker /health. Cached for _NLP_HEALTH_TTL seconds. Never raises."""
     import requests as _req
     now = time.monotonic()
-    if now - _NLP_HEALTH["checked_at"] < _NLP_HEALTH_TTL:
-        return _NLP_HEALTH["ok"]
+    with _NLP_HEALTH_LOCK:
+        if now - _NLP_HEALTH["checked_at"] < _NLP_HEALTH_TTL:
+            return _NLP_HEALTH["ok"]
+        # Optimistically claim the slot so other threads see fresh checked_at
+        _NLP_HEALTH["checked_at"] = now
     try:
         resp = _req.get(f"{Config.NLP_WORKER_URL}/health", timeout=3)
         result = resp.status_code == 200
     except Exception:
         result = False
-    _NLP_HEALTH["ok"] = result
-    _NLP_HEALTH["checked_at"] = now
+    with _NLP_HEALTH_LOCK:
+        _NLP_HEALTH["ok"] = result
+        _NLP_HEALTH["checked_at"] = time.monotonic()
     return result
 
 
