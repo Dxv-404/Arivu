@@ -557,8 +557,9 @@ def create_app():
         # the raw paper_id AND any DOI → S2 mapping from the papers table
         # to avoid duplicate builds for the same paper with different IDs.
         #
-        # 90s window: matches NLP_WORKER_TIMEOUT (cold start max = 90s).
-        # A job that just woke the NLP worker is still considered live.
+        # 300s window: Koyeb's proxy kills SSE after ~300s, so reconnects
+        # arrive with up to 300s since the last event.  BFS API calls during
+        # depth-2 expansion can also take 60-120s between events.
         existing_job = db.fetchone(
             """
             SELECT bj.job_id
@@ -567,11 +568,11 @@ def create_app():
                       SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
                   ))
               AND bj.status = 'pending'
-              AND bj.created_at > NOW() - INTERVAL '10 minutes'
+              AND bj.created_at > NOW() - INTERVAL '12 minutes'
               AND EXISTS (
                   SELECT 1 FROM job_events je
                   WHERE je.job_id = bj.job_id
-                    AND je.created_at > NOW() - INTERVAL '90 seconds'
+                    AND je.created_at > NOW() - INTERVAL '300 seconds'
               )
             ORDER BY bj.created_at DESC
             LIMIT 1
@@ -579,8 +580,8 @@ def create_app():
             (paper_id[:200], paper_id[:200]),
         )
 
-        # Also check for very fresh jobs (< 30s old) that haven't emitted
-        # events yet — the build thread may still be starting up.
+        # Fallback: any pending job < 5 min old for this paper — the build
+        # thread is likely still running even if events are sparse.
         if not existing_job:
             existing_job = db.fetchone(
                 """
@@ -589,7 +590,7 @@ def create_app():
                           SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
                       ))
                   AND status = 'pending'
-                  AND created_at > NOW() - INTERVAL '30 seconds'
+                  AND created_at > NOW() - INTERVAL '5 minutes'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,

@@ -40,20 +40,22 @@ class GraphLoader {
 
     this.eventSource.addEventListener('error', () => {
       // Guard: when WE close the EventSource (e.g. for retry), the browser
-      // may fire a final 'error' event with readyState=CLOSED. Suppress it
-      // so it doesn't overwrite the retry progress message.
+      // fires a re-entrant 'error' event synchronously from .close().
+      // _intentionalClose MUST be set BEFORE .close() to prevent re-entry.
       if (this._intentionalClose) return;
 
       if (this.eventSource.readyState === EventSource.CLOSED) {
-        // Koyeb's proxy may send a 502/504 when its request timeout (~300s)
-        // is hit, which causes EventSource to go straight to CLOSED instead
-        // of CONNECTING.  Auto-retry up to 3 times with a fresh EventSource.
+        // Koyeb's proxy sends 502/504 when its request timeout (~300s) hits,
+        // causing EventSource to go straight to CLOSED.  Auto-retry up to 5
+        // times with a fresh EventSource.  Each successful message resets the
+        // counter, so a 10-minute build survives 2+ proxy cycles.
         this._reconnectCount = (this._reconnectCount || 0) + 1;
-        if (this._reconnectCount <= 3) {
-          console.log(`[Arivu] SSE connection closed by proxy — retry ${this._reconnectCount}/3`);
-          this._updateProgress('🔄', `Reconnecting to server (attempt ${this._reconnectCount}/3)...`, null);
-          this.eventSource.close();
+        if (this._reconnectCount <= 5) {
+          console.log(`[Arivu] SSE connection closed by proxy — retry ${this._reconnectCount}/5`);
+          this._updateProgress('🔄', `Reconnecting to server (attempt ${this._reconnectCount}/5)...`, null);
+          // Set _intentionalClose BEFORE close() to prevent re-entrant error
           this._intentionalClose = true;
+          this.eventSource.close();
           setTimeout(() => this.start(), 2000);
         } else {
           clearInterval(this._stallTimer);
