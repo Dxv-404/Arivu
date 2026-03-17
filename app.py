@@ -601,11 +601,30 @@ def create_app():
             )
 
         _start_thread = False  # Only True if WE create a new build job below
+        _resurrect_thread = False  # True if we need to restart a dead build thread
 
         if existing_job:
             # Existing build is alive — just poll its events (no rate limit consumed)
             job_id = existing_job["job_id"]
-            logger.info(f"SSE reconnect: reusing LIVE build job {job_id} for {paper_id[:20]}…")
+            # Check if the build thread is actually alive by looking at recent events.
+            # If the gunicorn worker was killed (SIGKILL), daemon threads die with it.
+            # The job stays 'pending' but no thread is producing events.
+            last_event = db.fetchone(
+                "SELECT created_at FROM job_events WHERE job_id = %s ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            )
+            if last_event:
+                import datetime
+                event_age = (datetime.datetime.now(datetime.timezone.utc) - last_event["created_at"].replace(tzinfo=datetime.timezone.utc)).total_seconds()
+                if event_age > 90:
+                    # No events in 90s — build thread is likely dead, resurrect it
+                    logger.warning(f"SSE reconnect: build job {job_id} has stale events ({event_age:.0f}s old) — resurrecting build thread")
+                    _resurrect_thread = True
+                else:
+                    logger.info(f"SSE reconnect: reusing LIVE build job {job_id} for {paper_id[:20]}… (last event {event_age:.0f}s ago)")
+            else:
+                # No events at all — very fresh job or thread died before first event
+                logger.info(f"SSE reconnect: reusing build job {job_id} for {paper_id[:20]}… (no events yet)")
         else:
             # Fresh build required — apply rate limit NOW (not for cache hits or reconnects)
             allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
@@ -756,10 +775,15 @@ def create_app():
                     )
 
             # Only start a build thread if WE created the job (not reused from lock race)
-            if _start_thread:
+            # OR if we detected the original thread died (worker killed by gunicorn)
+            if _start_thread or _resurrect_thread:
                 thread = Thread(target=_background_build, daemon=True)
                 thread.start()
-                log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
+                if _resurrect_thread:
+                    logger.info(f"Resurrected build thread for job {job_id}")
+                    log_action(session_id, "graph_build_resurrect", {"paper_id": paper_id, "job_id": job_id})
+                else:
+                    log_action(session_id, "graph_build_start", {"paper_id": paper_id, "goal": user_goal})
 
         # Stream events from job_events as background thread writes them
         last_id_header = request.headers.get("Last-Event-ID", "0")
