@@ -835,4 +835,4 @@ class AncestryGraph:
                 (self._job_id, self._job_id, json.dumps(event)),
             )
         except Exception as e:
-            logger.debug(f"_emit DB write failed (non-fatal): {e}")
+            logger.warning(f"_emit DB write failed (non-fatal): {e}")

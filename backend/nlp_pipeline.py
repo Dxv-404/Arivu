@@ -178,7 +178,7 @@ class InheritanceDetector:
                 "analyzing",
                 f"Stage 1: Computing similarity for {len(edges_to_analyze)} edges…"
             )
-        stage1_results = await self._run_stage1_all(edges_to_analyze, all_papers)
+        stage1_results = await self._run_stage1_all(edges_to_analyze, all_papers, progress_callback)
 
         # Separate candidates (similarity > threshold) from low-similarity edges
         threshold = config.NLP_SIMILARITY_THRESHOLD
@@ -227,6 +227,11 @@ class InheritanceDetector:
             self._run_stage3(r, graph, pagerank_scores)
 
         # Build EdgeAnalysis objects and batch-cache them
+        if progress_callback:
+            await progress_callback(
+                "computing",
+                f"Saving {len(all_stage_results)} edge analyses to cache…"
+            )
         new_edges: list[EdgeAnalysis] = []
         for r in all_stage_results:
             ea = self._build_edge_analysis(r, all_papers)
@@ -237,18 +242,29 @@ class InheritanceDetector:
         # This prevents connection pool exhaustion that kills the SSE worker.
         self._save_cached_analysis_batch(new_edges)
 
+        if progress_callback:
+            await progress_callback(
+                "computing",
+                f"NLP analysis complete: {len(results)} edges processed."
+            )
+
         return results
 
     # ─── Stage 1: Similarity ─────────────────────────────────────────────────
 
     async def _run_stage1_all(
-        self, edges: list[tuple[str, str]], all_papers: dict[str, Paper]
+        self, edges: list[tuple[str, str]], all_papers: dict[str, Paper],
+        progress_callback=None,
     ) -> list[dict]:
         """Run Stage 1 on all edges with bounded concurrency.
 
         Uses Semaphore(3) — HuggingFace CPU tier is single-threaded, so
         higher concurrency just queues requests on the server side.
         Processes in chunks of 30 to bound memory and allow progress reporting.
+
+        Emits progress events every chunk to keep the SSE liveness check
+        alive — without these, the 600s liveness window can expire during
+        NLP processing, causing reconnections to think the build is dead.
         """
         sem = asyncio.Semaphore(3)   # HF CPU is single-threaded; 3 is generous
         results: list[dict] = []
@@ -259,8 +275,19 @@ class InheritanceDetector:
 
         # Process in chunks to bound coroutine memory
         chunk_size = 30
-        for i in range(0, len(edges), chunk_size):
+        total_edges = len(edges)
+        total_chunks = (total_edges + chunk_size - 1) // chunk_size
+        for i in range(0, total_edges, chunk_size):
             chunk = edges[i:i + chunk_size]
+            chunk_num = i // chunk_size + 1
+
+            # Emit progress every chunk to keep SSE liveness alive
+            if progress_callback:
+                await progress_callback(
+                    "analyzing",
+                    f"Stage 1: Similarity chunk {chunk_num}/{total_chunks} ({min(i + chunk_size, total_edges)}/{total_edges} edges)…"
+                )
+
             chunk_results = await asyncio.gather(
                 *[analyze_one(e) for e in chunk],
                 return_exceptions=True,
@@ -372,18 +399,26 @@ class InheritanceDetector:
         """
         Classify edges in batches of NLP_BATCH_SIZE via Groq.
         Mutates each edge dict in-place with mutation_type, citation_intent, etc.
-        Emits progress events every 5 batches to keep SSE stream alive.
+
+        Progress events are emitted BEFORE and AFTER each batch to keep the
+        SSE liveness check alive.  The Groq rate limiter throttle() can sleep
+        up to 60s, and each _classify_batch takes 2-30s.  Without pre-batch
+        events, the liveness window could expire during rate-limit backoff.
         """
         batch_size = config.NLP_BATCH_SIZE   # default 5
         total_batches = (len(edges) + batch_size - 1) // batch_size
         for i in range(0, len(edges), batch_size):
             batch = edges[i:i + batch_size]
             batch_num = i // batch_size + 1
-            if progress_callback and batch_num % 5 == 0:
+
+            # Emit BEFORE the batch — resets liveness timer before potential
+            # 60s rate-limit throttle inside _classify_batch
+            if progress_callback:
                 await progress_callback(
                     "analyzing",
-                    f"Stage 2: LLM classified {i}/{len(edges)} edges ({batch_num}/{total_batches} batches)…"
+                    f"Stage 2: LLM batch {batch_num}/{total_batches} ({min(i + batch_size, len(edges))}/{len(edges)} edges)…"
                 )
+
             await self._classify_batch(batch)
 
     async def _classify_batch(self, batch: list[dict]) -> None:
@@ -420,24 +455,29 @@ Return ONLY valid JSON — no markdown, no preamble:
         await coordinated_rate_limiter.throttle("groq")
         try:
             import httpx as _httpx
-            client = await self._client()
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                json={
-                    "model": config.GROQ_FAST_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 800,
-                    "temperature": 0.1,
-                },
-                timeout=_httpx.Timeout(30.0, connect=5.0),  # Groq is fast; don't use NLP_WORKER_TIMEOUT (90s)
-            )
-            if resp.status_code == 429:
-                await coordinated_rate_limiter.record_rate_limit("groq", 60)
-                self._apply_fallback_classification(batch)
-                return
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"]
+            # Use a dedicated client for Groq — NOT self._client() which is
+            # configured with NLP worker headers (X-API-Key would leak the
+            # NLP worker secret to Groq's servers).
+            async with _httpx.AsyncClient(
+                timeout=_httpx.Timeout(30.0, connect=5.0),
+                headers={"User-Agent": "Arivu/1.0"},
+            ) as groq_client:
+                resp = await groq_client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
+                    json={
+                        "model": config.GROQ_FAST_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 800,
+                        "temperature": 0.1,
+                    },
+                )
+                if resp.status_code == 429:
+                    await coordinated_rate_limiter.record_rate_limit("groq", 60)
+                    self._apply_fallback_classification(batch)
+                    return
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"]
         except Exception as e:
             logger.warning(f"Groq classification failed: {e}")
             self._apply_fallback_classification(batch)

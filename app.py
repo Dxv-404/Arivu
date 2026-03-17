@@ -548,18 +548,19 @@ def create_app():
         # started by session A can be reused by session B for the same paper.
         #
         # LIVENESS CHECK: A pending job is only "alive" if it has produced a
-        # job_event within the last 90 seconds.  On Koyeb free tier, instance
+        # job_event within the last 600 seconds.  On Koyeb free tier, instance
         # recycling kills daemon build threads silently — without a liveness
         # check, new requests latch onto the dead job and poll forever.
+        #
+        # 600s window: The NLP pipeline can go 3-5 minutes between progress
+        # events during encode_batch → similarity_matrix → Groq batches.
+        # Combined with Koyeb's ~300s proxy timeout that triggers the
+        # reconnect, we need at least 600s to avoid false-negative liveness.
         #
         # DOI-AWARE: build_jobs.paper_id may store either a raw DOI or an
         # S2 paper ID (depending on what the user submitted).  We check both
         # the raw paper_id AND any DOI → S2 mapping from the papers table
         # to avoid duplicate builds for the same paper with different IDs.
-        #
-        # 300s window: Koyeb's proxy kills SSE after ~300s, so reconnects
-        # arrive with up to 300s since the last event.  BFS API calls during
-        # depth-2 expansion can also take 60-120s between events.
         existing_job = db.fetchone(
             """
             SELECT bj.job_id
@@ -572,7 +573,7 @@ def create_app():
               AND EXISTS (
                   SELECT 1 FROM job_events je
                   WHERE je.job_id = bj.job_id
-                    AND je.created_at > NOW() - INTERVAL '300 seconds'
+                    AND je.created_at > NOW() - INTERVAL '600 seconds'
               )
             ORDER BY bj.created_at DESC
             LIMIT 1
@@ -580,8 +581,10 @@ def create_app():
             (paper_id[:200], paper_id[:200]),
         )
 
-        # Fallback: any pending job < 5 min old for this paper — the build
-        # thread is likely still running even if events are sparse.
+        # Fallback: any pending job < 12 min old for this paper — the build
+        # thread is likely still running even if events are sparse.  On Koyeb
+        # free tier, depth-2 BFS takes 4+ min and NLP takes another 3-5 min,
+        # so builds regularly exceed 5 minutes total.
         if not existing_job:
             existing_job = db.fetchone(
                 """
@@ -590,12 +593,14 @@ def create_app():
                           SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
                       ))
                   AND status = 'pending'
-                  AND created_at > NOW() - INTERVAL '5 minutes'
+                  AND created_at > NOW() - INTERVAL '12 minutes'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 (paper_id[:200], paper_id[:200]),
             )
+
+        _start_thread = False  # Only True if WE create a new build job below
 
         if existing_job:
             # Existing build is alive — just poll its events (no rate limit consumed)
@@ -633,7 +638,7 @@ def create_app():
                                   SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
                               ))
                           AND status = 'pending'
-                          AND created_at > NOW() - INTERVAL '30 seconds'
+                          AND created_at > NOW() - INTERVAL '12 minutes'
                     )
                     """,
                     (job_id, paper_id[:200], session_id, paper_id[:200], paper_id[:200]),
@@ -652,7 +657,7 @@ def create_app():
                               SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
                           ))
                       AND status = 'pending'
-                      AND created_at > NOW() - INTERVAL '30 seconds'
+                      AND created_at > NOW() - INTERVAL '12 minutes'
                     ORDER BY created_at DESC LIMIT 1
                     """,
                     (paper_id[:200], paper_id[:200]),
@@ -663,14 +668,49 @@ def create_app():
                 else:
                     # Edge case: the other job finished/errored between our
                     # INSERT check and this SELECT.  Create our own.
+                    # Use ON CONFLICT to handle the race condition where a
+                    # pending job exists but our time-window queries missed it
+                    # (e.g. created_at is just outside the 12-minute window).
                     _start_thread = True
-                    db.execute(
-                        """
-                        INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
-                        VALUES (%s, %s, %s, 'pending', NOW())
-                        """,
-                        (job_id, paper_id[:200], session_id),
-                    )
+                    try:
+                        db.execute(
+                            """
+                            INSERT INTO build_jobs (job_id, paper_id, session_id, status, created_at)
+                            VALUES (%s, %s, %s, 'pending', NOW())
+                            """,
+                            (job_id, paper_id[:200], session_id),
+                        )
+                    except Exception as insert_err:
+                        # UniqueViolation means a pending job exists — find and reuse it.
+                        # Time-window: 12 min matches all other queries. Without this,
+                        # ancient stuck 'pending' jobs cause infinite stall loops.
+                        logger.warning(f"build_jobs fallback INSERT failed (reusing existing): {insert_err}")
+                        _start_thread = False
+                        fallback_job = db.fetchone(
+                            """
+                            SELECT job_id FROM build_jobs
+                            WHERE (paper_id = %s OR paper_id IN (
+                                      SELECT paper_id FROM papers WHERE doi = %s LIMIT 1
+                                  ))
+                              AND status = 'pending'
+                              AND created_at > NOW() - INTERVAL '12 minutes'
+                            ORDER BY created_at DESC LIMIT 1
+                            """,
+                            (paper_id[:200], paper_id[:200]),
+                        )
+                        if fallback_job:
+                            job_id = fallback_job["job_id"]
+                            logger.info(f"SSE fallback dedup: reusing job {job_id}")
+                        else:
+                            # No valid pending job found — emit error to client
+                            logger.error(f"No reusable build job found for {paper_id[:20]}; unique constraint blocked INSERT but no pending job exists")
+                            def _no_job_stream():
+                                yield f"data: {json.dumps({'status': 'error', 'message': 'Build conflict — please try again.', 'retry': True})}\n\n"
+                            return Response(
+                                stream_with_context(_no_job_stream()),
+                                mimetype="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                            )
 
             # Extract user info BEFORE spawning background thread
             # (Flask request context is unavailable in background threads)
@@ -731,21 +771,22 @@ def create_app():
             Flask's stream_with_context() raises GeneratorExit when the client
             disconnects; we catch it to log and exit cleanly.
 
-            STALL DETECTION: If no new events appear for 4 minutes while
+            STALL DETECTION: If no new events appear for 660 seconds while
             the build_job is still 'pending', the background thread is dead
             (Koyeb instance recycled).  We mark it timed_out and tell the
             client to retry.
 
-            Why 5 minutes stall (not 2): Stage 2 NLP analysis can process
-            200+ edges in batches of 5 through Groq's API.  40 Groq calls
-            × 3s each = ~120s.  The NLP worker cold start adds up to 90s.
-            BFS depth-2 for biology papers with 50+ refs each can take
-            5-8 minutes.  So 300s stall limit avoids false positives.
+            Why 660s stall limit: The reconnection guard uses a 600s liveness
+            window. The stall limit MUST be >= the liveness window, otherwise
+            the SSE watcher kills a build that the reconnection guard still
+            considers alive, creating competing states and duplicate builds.
+            We use 660s (slightly above 600s) to avoid edge-case races.
             """
             sequence = int(last_id_header) if last_id_header.isdigit() else 0
-            deadline = time.time() + 600   # 10-minute overall timeout
+            deadline = time.time() + 720   # 12-minute overall timeout (> stall_limit)
             last_event_time = time.time()   # Track when we last got a real event
-            stall_limit = 300               # 5 minutes without events = dead thread
+            stall_limit = 660               # 11 minutes without events = dead thread
+            last_job_check_time = 0.0       # Rate-limit missed-done DB queries to every 15s
 
             try:
                 while time.time() < deadline:
@@ -776,9 +817,9 @@ def create_app():
 
                     if not events:
                         # ── Stall detection ──────────────────────────────────
-                        # If 4+ minutes without any new events, check if the
-                        # build job is still pending.  If so, the background
-                        # thread is dead — mark it and tell client to retry.
+                        # Check build job status to detect both stalls AND
+                        # completed builds where the 'done' event was missed
+                        # (e.g. _emit DB write failed silently).
                         if time.time() - last_event_time > stall_limit:
                             job_status = db.fetchone(
                                 "SELECT status FROM build_jobs WHERE job_id = %s",
@@ -797,6 +838,50 @@ def create_app():
                                 except Exception:
                                     pass  # Best-effort — still tell client to retry
                                 yield f"data: {json.dumps({'status': 'error', 'message': 'Build thread died (server restarted). Please try again.', 'retry': True})}\n\n"
+                                return
+
+                        # ── Missed-done detection ────────────────────────────
+                        # If the build completed but _emit("done") failed
+                        # (e.g. pool exhaustion), the SSE stream would loop
+                        # forever.  Periodically check if build_jobs is 'done'
+                        # and synthesize a done event from the cached graph.
+                        # Rate-limited to once per 15s to avoid DB hammering
+                        # (without this, the query fires every 2s = 315 times
+                        # over a 660s stall window).
+                        now_check = time.time()
+                        if now_check - last_event_time > 30 and now_check - last_job_check_time > 15:
+                            last_job_check_time = now_check
+                            job_check = db.fetchone(
+                                "SELECT status FROM build_jobs WHERE job_id = %s",
+                                (job_id,),
+                            )
+                            if job_check and job_check["status"] == "done":
+                                logger.info(f"Build job {job_id} done but SSE missed done event — synthesizing")
+                                # Try to load the cached graph
+                                try:
+                                    cached = db.fetchone(
+                                        """
+                                        SELECT graph_json FROM graphs
+                                        WHERE seed_paper_id = (
+                                            SELECT paper_id FROM build_jobs WHERE job_id = %s
+                                        )
+                                        ORDER BY created_at DESC LIMIT 1
+                                        """,
+                                        (job_id,),
+                                    )
+                                    if cached and cached.get("graph_json"):
+                                        gdata = cached["graph_json"]
+                                        if isinstance(gdata, str):
+                                            gdata = json.loads(gdata)
+                                        yield f"data: {json.dumps({'status': 'done', 'graph': gdata})}\n\n"
+                                        return
+                                except Exception as synth_err:
+                                    logger.warning(f"Failed to synthesize done event: {synth_err}")
+                                # Even without graph data, tell client it's done
+                                yield f"data: {json.dumps({'status': 'done', 'message': 'Build completed. Refresh to load graph.'})}\n\n"
+                                return
+                            elif job_check and job_check["status"] == "error":
+                                yield f"data: {json.dumps({'status': 'error', 'message': 'Build failed. Please try again.', 'retry': True})}\n\n"
                                 return
 
                         # Send keepalive every 2s to prevent Koyeb/proxy timeout.
