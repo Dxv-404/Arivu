@@ -39,3 +39,7 @@ data/precomputed/
 # OS
 .DS_Store
 Thumbs.db
+flask_log.txt
+flask_test.log
+server.log
+*.log
