@@ -138,16 +138,26 @@ class SmartPaperResolver:
         """
         Detect current operational tier at build start.
         Called once per build — sets self._build_tier. Thread-safe.
+
+        Without an S2 API key, we proactively skip S2 to avoid wasting 5+ seconds
+        per batch on rate-limited 429 failures. S2 without a key has a 1 req/s limit;
+        with 5 concurrent papers expanding at depth 2, the rate limiter serializes
+        all 5 S2 attempts (5+ seconds wasted), and they all 429 anyway. Going straight
+        to OpenAlex (9 req/s) is both faster and more reliable.
         """
         with self._tier_lock:
             if config.S2_API_KEY:
                 self._build_tier = 1
-            elif time.time() < self._s2_skip_until:
-                self._build_tier = 3  # S2 already known to be down
             else:
-                self._build_tier = 2  # Will try S2, may downgrade to 3
+                # No API key → proactively skip S2 for this build.
+                # Use max() to avoid shortening an existing mark_s2_down() window.
+                # This avoids the 5-second rate-limiter penalty of trying S2
+                # just to get 429'd on every concurrent BFS expansion.
+                self._s2_skip_until = max(self._s2_skip_until, time.time() + 60)
+                self._build_tier = 2
             tier = self._build_tier
-        logger.info(f"API tier detected: Tier {tier}")
+        tier_label = {1: "S2-primary", 2: "OpenAlex-primary", 3: "OpenAlex-only"}
+        logger.info(f"API tier detected: Tier {tier} ({tier_label.get(tier, '?')})")
         return tier
 
     def reset_for_new_build(self) -> None:
@@ -788,15 +798,15 @@ class SmartPaperResolver:
         if not ref_oa_ids:
             return []
 
-        # Step 2: Batch-fetch referenced works from OpenAlex
-        # Batch into groups of 25 to avoid URL length limits (~2000 char max).
-        # Each OpenAlex ID is ~12 chars + pipe separator = ~325 chars per batch.
+        # Step 2: Batch-fetch referenced works from OpenAlex — CONCURRENT.
+        # Previously this was a serial for-loop: 4 batches × 2-3s each = 8-12s.
+        # With asyncio.gather(), all 4 batches run concurrently: ~2-3s total.
         parsed_refs = []
         dois_to_resolve = []
         OA_BATCH_SIZE = 25
 
-        for batch_start in range(0, len(ref_oa_ids), OA_BATCH_SIZE):
-            batch_ids = ref_oa_ids[batch_start:batch_start + OA_BATCH_SIZE]
+        async def _fetch_oa_batch(batch_ids: list[str]) -> list[dict]:
+            """Fetch one batch of OpenAlex works. Rate-limited."""
             await coordinated_rate_limiter.throttle("openalex")
             try:
                 id_filter = "|".join(batch_ids)
@@ -810,13 +820,29 @@ class SmartPaperResolver:
                     headers=self._oa_headers(),
                 )
                 if resp.status_code != 200:
-                    continue
-                batch_data = resp.json()
+                    return []
+                return resp.json().get("results", [])
             except Exception as e:
-                logger.debug(f"OpenAlex batch reference fetch failed (batch {batch_start}): {e}")
-                continue
+                logger.debug(f"OpenAlex batch reference fetch failed: {e}")
+                return []
 
-            for item in batch_data.get("results", []):
+        # Split into batches of 25 (URL length limit)
+        oa_batches = [
+            ref_oa_ids[i:i + OA_BATCH_SIZE]
+            for i in range(0, len(ref_oa_ids), OA_BATCH_SIZE)
+        ]
+
+        # Run all batches concurrently — rate limiter handles throughput control
+        batch_results = await asyncio.gather(
+            *[_fetch_oa_batch(batch) for batch in oa_batches],
+            return_exceptions=True,
+        )
+
+        for result in batch_results:
+            if isinstance(result, Exception):
+                logger.debug(f"OpenAlex batch raised: {result}")
+                continue
+            for item in result:
                 parsed = self._parse_openalex_response(item)
                 if not parsed or not parsed.get("title"):
                     continue
@@ -855,9 +881,12 @@ class SmartPaperResolver:
                 text_tier=3 if ref.get("abstract") else 4,
                 fields_of_study=ref.get("fields_of_study") or [],
             )
-            # Cache the paper so BFS at deeper levels can find its DOI
-            self._save_to_cache(paper)
             papers.append(paper)
+
+        # Batch cache save — one connection + one COMMIT for all papers instead of
+        # N individual _save_to_cache() calls, each with their own pool round-trip.
+        # At depth 2 with 50+ refs per paper, this saves significant Neon latency.
+        self._save_batch_to_cache(papers)
 
         logger.info(
             f"OpenAlex refs fallback: {len(papers)}/{len(parsed_refs)} "
@@ -1272,6 +1301,67 @@ class SmartPaperResolver:
             )
         except Exception as e:
             logger.debug(f"Cache save failed for {paper.paper_id}: {e}")
+
+    @staticmethod
+    def _save_batch_to_cache(papers: list[Paper]) -> None:
+        """
+        Batch upsert resolved papers into the papers table.
+        Uses executemany to share one connection checkout + one COMMIT for all N papers,
+        instead of N individual _save_to_cache() calls each with their own connection.
+        Note: psycopg2 executemany still sends N SQL statements, but avoids N pool
+        round-trips (getconn/putconn) and N transaction commits — significant on Neon.
+        Falls back to individual saves if batch fails.
+        """
+        if not papers:
+            return
+        import json as _json
+        rows = []
+        for p in papers:
+            rows.append((
+                p.paper_id, p.title, p.abstract, p.year, p.citation_count,
+                _json.dumps(p.fields_of_study), _json.dumps(p.authors),
+                p.doi, p.url, p.text_tier, p.is_retracted, p.language,
+                _json.dumps(p.source_ids),
+            ))
+        try:
+            db.executemany(
+                """
+                INSERT INTO papers (
+                    paper_id, title, abstract, year, citation_count,
+                    fields_of_study, authors, doi, url, text_tier,
+                    is_retracted, language, source_ids, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s::jsonb, %s::jsonb, %s, %s, %s,
+                    %s, %s, %s::jsonb, NOW()
+                )
+                ON CONFLICT (paper_id) DO UPDATE SET
+                    title          = EXCLUDED.title,
+                    abstract       = COALESCE(EXCLUDED.abstract, papers.abstract),
+                    year           = COALESCE(EXCLUDED.year, papers.year),
+                    citation_count = EXCLUDED.citation_count,
+                    doi            = COALESCE(EXCLUDED.doi, papers.doi),
+                    url            = COALESCE(EXCLUDED.url, papers.url),
+                    fields_of_study = CASE
+                        WHEN EXCLUDED.fields_of_study::text != '[]'
+                        THEN EXCLUDED.fields_of_study
+                        ELSE papers.fields_of_study
+                    END,
+                    authors        = CASE
+                        WHEN EXCLUDED.authors::text != '[]'
+                        THEN EXCLUDED.authors
+                        ELSE papers.authors
+                    END,
+                    source_ids     = EXCLUDED.source_ids,
+                    created_at     = NOW()
+                """,
+                rows,
+            )
+            logger.debug(f"Batch cache save: {len(papers)} papers")
+        except Exception as e:
+            logger.warning(f"Batch cache save failed, falling back to individual: {e}")
+            for p in papers:
+                SmartPaperResolver._save_to_cache(p)
 
 
 def _reconstruct_abstract(inverted_index: dict) -> Optional[str]:
