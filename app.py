@@ -552,10 +552,9 @@ def create_app():
         # recycling kills daemon build threads silently — without a liveness
         # check, new requests latch onto the dead job and poll forever.
         #
-        # 600s window: The NLP pipeline can go 3-5 minutes between progress
-        # events during encode_batch → similarity_matrix → Groq batches.
-        # Combined with Koyeb's ~300s proxy timeout that triggers the
-        # reconnect, we need at least 600s to avoid false-negative liveness.
+        # 1200s window: On Koyeb's 0.1 vCPU free tier, full builds take 12-15
+        # minutes.  The NLP pipeline can go 3-5 minutes between progress events.
+        # Combined with Koyeb's ~300s proxy timeout, we need a wide window.
         #
         # DOI-AWARE: build_jobs.paper_id may store either a raw DOI or an
         # S2 paper ID (depending on what the user submitted).  We check both
@@ -573,7 +572,7 @@ def create_app():
               AND EXISTS (
                   SELECT 1 FROM job_events je
                   WHERE je.job_id = bj.job_id
-                    AND je.created_at > NOW() - INTERVAL '600 seconds'
+                    AND je.created_at > NOW() - INTERVAL '1200 seconds'
               )
             ORDER BY bj.created_at DESC
             LIMIT 1
@@ -795,21 +794,19 @@ def create_app():
             Flask's stream_with_context() raises GeneratorExit when the client
             disconnects; we catch it to log and exit cleanly.
 
-            STALL DETECTION: If no new events appear for 660 seconds while
+            STALL DETECTION: If no new events appear for 1100 seconds while
             the build_job is still 'pending', the background thread is dead
             (Koyeb instance recycled).  We mark it timed_out and tell the
             client to retry.
 
-            Why 660s stall limit: The reconnection guard uses a 600s liveness
-            window. The stall limit MUST be >= the liveness window, otherwise
-            the SSE watcher kills a build that the reconnection guard still
-            considers alive, creating competing states and duplicate builds.
-            We use 660s (slightly above 600s) to avoid edge-case races.
+            Why 1100s stall limit: The reconnection guard uses a 1200s liveness
+            window. The stall limit MUST be >= the liveness window minus some
+            buffer. On Koyeb 0.1 vCPU, builds take 12-15 minutes total.
             """
             sequence = int(last_id_header) if last_id_header.isdigit() else 0
-            deadline = time.time() + 720   # 12-minute overall timeout (> stall_limit)
+            deadline = time.time() + 1200   # 20-minute overall timeout (Koyeb 0.1 vCPU builds take 12-15 min)
             last_event_time = time.time()   # Track when we last got a real event
-            stall_limit = 660               # 11 minutes without events = dead thread
+            stall_limit = 1100              # 18+ minutes without events = dead thread
             last_job_check_time = 0.0       # Rate-limit missed-done DB queries to every 15s
 
             try:
@@ -925,7 +922,7 @@ def create_app():
                     )
                 except Exception:
                     pass
-                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 10 minutes'})}\n\n"
+                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 20 minutes. This paper may have too many references — try a more specific paper.'})}\n\n"
 
             except GeneratorExit:
                 # Client disconnected — clean up and exit silently
