@@ -276,9 +276,9 @@ def create_app():
     # the dead job via the reconnection guard and poll job_events forever.
     # Fix: on startup, mark all stale pending jobs as 'timed_out'.
     #
-    # Threshold is 6 minutes (not 5) to avoid killing live builds from
+    # Threshold is 12 minutes (not 10) to avoid killing live builds from
     # the OLD instance during a rolling deploy — the SSE deadline is
-    # 5 minutes, so any build that is 6+ minutes old has either finished
+    # 10 minutes, so any build that is 12+ minutes old has either finished
     # or been timed out by the SSE handler already.
     try:
         cleaned = db.execute(
@@ -286,7 +286,7 @@ def create_app():
             UPDATE build_jobs
             SET status = 'timed_out'
             WHERE status = 'pending'
-              AND created_at < NOW() - INTERVAL '6 minutes'
+              AND created_at < NOW() - INTERVAL '12 minutes'
             """,
             (),
         )
@@ -727,16 +727,16 @@ def create_app():
             (Koyeb instance recycled).  We mark it timed_out and tell the
             client to retry.
 
-            Why 4 minutes (not 2): Stage 2 NLP analysis can process 200+
-            edges in batches of 5 through Groq's API without emitting any
-            intermediate events.  40 Groq calls × 3s each = ~120s.  The NLP
-            worker cold start adds up to 90s.  So 240s is the safe stall
-            limit that avoids false positives on legitimately slow builds.
+            Why 5 minutes stall (not 2): Stage 2 NLP analysis can process
+            200+ edges in batches of 5 through Groq's API.  40 Groq calls
+            × 3s each = ~120s.  The NLP worker cold start adds up to 90s.
+            BFS depth-2 for biology papers with 50+ refs each can take
+            5-8 minutes.  So 300s stall limit avoids false positives.
             """
             sequence = int(last_id_header) if last_id_header.isdigit() else 0
-            deadline = time.time() + 300   # 5-minute overall timeout
+            deadline = time.time() + 600   # 10-minute overall timeout
             last_event_time = time.time()   # Track when we last got a real event
-            stall_limit = 240               # 4 minutes without events = dead thread
+            stall_limit = 300               # 5 minutes without events = dead thread
 
             try:
                 while time.time() < deadline:
@@ -798,8 +798,8 @@ def create_app():
                     else:
                         time.sleep(0.3)
 
-                # Overall 5-minute timeout hit — mark the job so it's not reused
-                logger.warning(f"Build job {job_id} hit 5-minute SSE timeout — marking timed_out")
+                # Overall 10-minute timeout hit — mark the job so it's not reused
+                logger.warning(f"Build job {job_id} hit 10-minute SSE timeout — marking timed_out")
                 try:
                     db.execute(
                         "UPDATE build_jobs SET status = 'timed_out' WHERE job_id = %s AND status = 'pending'",
@@ -807,7 +807,7 @@ def create_app():
                     )
                 except Exception:
                     pass
-                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 5 minutes'})}\n\n"
+                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 10 minutes'})}\n\n"
 
             except GeneratorExit:
                 # Client disconnected — clean up and exit silently
