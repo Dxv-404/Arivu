@@ -266,12 +266,12 @@ class GraphLoader {
       .sort((a,b) => (b.citation_count||0) - (a.citation_count||0))
       .map(n => `
         <tr>
-          <td><a href="${n.url || (n.doi ? 'https://doi.org/' + n.doi : '') || (n.id ? 'https://www.semanticscholar.org/paper/' + n.id : '#')}" target="_blank" rel="noopener">${n.title||'Unknown'}</a></td>
+          <td><a href="${n.url || (n.doi ? 'https://doi.org/' + encodeURIComponent(n.doi) : '') || (n.id ? 'https://www.semanticscholar.org/paper/' + n.id : '#')}" target="_blank" rel="noopener">${n.title||'Unknown'}</a></td>
           <td>${(n.authors||[]).slice(0,2).join(', ')}</td>
           <td>${(n.citation_count||0).toLocaleString()}</td>
           <td>${n.year||'?'}</td>
           <td>${(n.fields_of_study||[])[0]||'?'}</td>
-          <td>${typeof n.pruning_impact === 'number' ? n.pruning_impact + ' papers' : '—'}</td>
+          <td>${Number.isFinite(n.pruning_impact) ? n.pruning_impact + ' papers' : '—'}</td>
         </tr>
       `).join('');
   }

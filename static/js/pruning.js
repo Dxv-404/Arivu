@@ -11,6 +11,12 @@ class PruningSystem {
     this.pruneSet = new Set();
     this.currentResult = null;
     this._graphSeedId = graph.metadata.seed_paper_id;
+    this._pillMutated = false; // Track whether _showPrunedState replaced pill HTML
+
+    // Capture the pill's original HTML once at construction time.
+    // reset() restores this instead of duplicating the template string in JS.
+    const pill = document.getElementById('prune-pill');
+    this._originalPillHTML = pill ? pill.innerHTML : '';
 
     this._setupListeners();
     this._setupKeyboard();
@@ -52,8 +58,10 @@ class PruningSystem {
     this.state = 'animating';
     this._hidePill();
 
-    // Snapshot DNA before pruning
-    if (window._dnaChart) window._dnaChart.takeSnapshot();
+    // Snapshot DNA before pruning (guard against missing chart)
+    if (window._dnaChart && typeof window._dnaChart.takeSnapshot === 'function') {
+      window._dnaChart.takeSnapshot();
+    }
 
     try {
       const resp = await fetch('/api/prune', {
@@ -178,19 +186,21 @@ class PruningSystem {
       .attr('stroke-opacity', 0.4)
       .attr('stroke-width', d => 0.5 + (d.similarity_score||0) * 3);
 
-    // Restore the pill's original HTML structure.
-    // _showPrunedState() replaces innerHTML entirely, destroying the
-    // #prune-pill-count span that _updatePill() depends on.
-    const pill = document.getElementById('prune-pill');
-    if (pill) {
-      pill.innerHTML =
-        '<span id="prune-pill-count">0</span> papers selected ' +
-        '<button id="prune-execute-btn">Simulate removal &rarr;</button> ' +
-        '<button id="prune-clear-btn" aria-label="Clear selection">&times;</button>';
-      pill.classList.add('hidden');
-      // Re-attach listeners since innerHTML replacement destroyed the old elements
-      document.getElementById('prune-execute-btn')?.addEventListener('click', () => this.execute());
-      document.getElementById('prune-clear-btn')?.addEventListener('click', () => this.reset());
+    // Only restore pill HTML if _showPrunedState() actually mutated it.
+    // This prevents unnecessary DOM destruction and listener re-attachment
+    // when reset() is called from idle state (e.g. Escape key, arivu:reset-prune).
+    if (this._pillMutated) {
+      const pill = document.getElementById('prune-pill');
+      if (pill) {
+        pill.innerHTML = this._originalPillHTML;
+        pill.classList.add('hidden');
+        // Re-attach listeners since innerHTML replacement destroyed the old elements
+        document.getElementById('prune-execute-btn')?.addEventListener('click', () => this.execute());
+        document.getElementById('prune-clear-btn')?.addEventListener('click', () => this.reset());
+      }
+      this._pillMutated = false;
+    } else {
+      this._updatePill();
     }
 
     document.getElementById('prune-stats-panel')?.classList.add('hidden');
@@ -216,6 +226,7 @@ class PruningSystem {
       pill.innerHTML = `${pct}% of graph collapsed · <button id="prune-reset-btn">Reset</button>`;
       pill.classList.remove('hidden');
       document.getElementById('prune-reset-btn')?.addEventListener('click', () => this.reset());
+      this._pillMutated = true;  // Track that we replaced innerHTML
     }
   }
 

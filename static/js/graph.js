@@ -216,8 +216,9 @@ class ArivuGraph {
             .on('click', (event, d) => this._handleNodeClick(event, d))
             .on('dblclick', (event, d) => {
               // Fallback chain: S2 url → DOI resolver → S2 paper page by ID
+              // DOI must be percent-encoded (SICI DOIs contain <, >, ;, etc.)
               const target = d.url
-                || (d.doi ? `https://doi.org/${d.doi}` : null)
+                || (d.doi ? `https://doi.org/${encodeURIComponent(d.doi)}` : null)
                 || (d.id  ? `https://www.semanticscholar.org/paper/${d.id}` : null);
               if (target) window.open(target, '_blank');
             })

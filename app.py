@@ -3031,12 +3031,10 @@ def create_app():
         metadata = graph_data.get("metadata", {})
         nodes    = graph_data.get("nodes", [])
         total    = len(nodes)
-        # Graph JSON stores "abstract_preview" (first 200 chars), not "abstract".
-        # Check both keys for robustness — abstract_preview is the primary field.
-        with_abstract  = sum(
-            1 for n in nodes
-            if n.get("abstract_preview") or n.get("abstract")
-        )
+        # Graph JSON stores "abstract_preview" (first 200 chars of the abstract),
+        # not "abstract". Empty string is falsy, correctly excluding papers
+        # where paper.abstract was None → abstract_preview is "".
+        with_abstract  = sum(1 for n in nodes if n.get("abstract_preview"))
         coverage_score = metadata.get("coverage_score", with_abstract / max(total, 1))
 
         return jsonify({
