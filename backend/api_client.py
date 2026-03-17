@@ -881,18 +881,22 @@ class SmartPaperResolver:
         result: dict[str, str] = {}
         uncached: list[str] = []
 
-        # Check DB cache first (free, no API call)
-        for doi in dois:
-            try:
-                row = db.fetchone(
-                    "SELECT paper_id FROM papers WHERE doi = %s", (doi,),
-                )
-                if row:
-                    result[doi] = row["paper_id"]
+        # Check DB cache first — single batch query instead of N round trips.
+        # With 50 DOIs per paper at depth 2, this saves ~2500 individual queries.
+        try:
+            rows = db.fetchall(
+                "SELECT doi, paper_id FROM papers WHERE doi = ANY(%s)",
+                (list(dois),),
+            )
+            cached_dois = {row["doi"]: row["paper_id"] for row in rows}
+            for doi in dois:
+                if doi in cached_dois:
+                    result[doi] = cached_dois[doi]
                 else:
                     uncached.append(doi)
-            except Exception:
-                uncached.append(doi)
+        except Exception:
+            # DB batch failed — treat all as uncached
+            uncached = list(dois)
 
         if not uncached:
             return result

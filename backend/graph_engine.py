@@ -369,7 +369,9 @@ class AncestryGraph:
             f"Running NLP analysis on {num_edges} edges…"
         )
         edges = list(self.graph.edges())
-        edge_analyses = await self._nlp.analyze_edges(edges, all_papers, self.graph)
+        edge_analyses = await self._nlp.analyze_edges(
+            edges, all_papers, self.graph, progress_callback=self._emit
+        )
 
         # Attach analysis results as edge attributes
         for ea in edge_analyses:
@@ -658,7 +660,18 @@ class AncestryGraph:
                         )
                         resp.raise_for_status()
                         data = resp.json()
-                        all_embeddings.extend(data["embeddings"])
+                        embeddings_chunk = data.get("embeddings", [])
+                        # Validate length — mismatched count would misalign
+                        # the zip(to_encode, all_embeddings) and silently pair
+                        # wrong embeddings with wrong paper_ids.
+                        if len(embeddings_chunk) != len(chunk):
+                            logger.warning(
+                                f"NLP worker embedding count mismatch: "
+                                f"sent {len(chunk)}, got {len(embeddings_chunk)} — padding with None"
+                            )
+                            all_embeddings.extend([None] * len(chunk))
+                        else:
+                            all_embeddings.extend(embeddings_chunk)
                     except Exception as e:
                         logger.warning(f"Embedding chunk {i//chunk_size} failed: {e}")
                         # Fill with None placeholders so indices stay aligned
@@ -667,13 +680,17 @@ class AncestryGraph:
             logger.warning(f"Embedding population failed (non-fatal): {e}")
             return
 
-        # Persist embeddings to paper_embeddings table
-        inserted = 0
+        # Persist embeddings to paper_embeddings table — batched for performance.
+        # Individual INSERTs for 200+ papers causes 200+ DB round trips on Neon.
+        # Using executemany reduces this to a single round trip.
+        insert_rows = []
         for (paper_id, _), embedding in zip(to_encode, all_embeddings):
-            if embedding is None:
-                continue
+            if embedding is not None:
+                insert_rows.append((paper_id, str(embedding), MODEL_VERSION))
+
+        if insert_rows:
             try:
-                db.execute(
+                db.executemany(
                     """
                     INSERT INTO paper_embeddings (paper_id, embedding, model_version, computed_at)
                     VALUES (%s, %s::vector, %s, NOW())
@@ -682,13 +699,29 @@ class AncestryGraph:
                         model_version = EXCLUDED.model_version,
                         computed_at   = NOW()
                     """,
-                    (paper_id, str(embedding), MODEL_VERSION),
+                    insert_rows,
                 )
-                inserted += 1
+                logger.info(f"Embeddings stored: {len(insert_rows)}/{len(to_encode)}")
             except Exception as e:
-                logger.debug(f"Embedding insert failed for {paper_id}: {e}")
-
-        logger.info(f"Embeddings stored: {inserted}/{len(to_encode)}")
+                logger.warning(f"Batch embedding insert failed, falling back to individual: {e}")
+                inserted = 0
+                for paper_id, emb_str, version in insert_rows:
+                    try:
+                        db.execute(
+                            """
+                            INSERT INTO paper_embeddings (paper_id, embedding, model_version, computed_at)
+                            VALUES (%s, %s::vector, %s, NOW())
+                            ON CONFLICT (paper_id) DO UPDATE SET
+                                embedding     = EXCLUDED.embedding,
+                                model_version = EXCLUDED.model_version,
+                                computed_at   = NOW()
+                            """,
+                            (paper_id, emb_str, version),
+                        )
+                        inserted += 1
+                    except Exception as e2:
+                        logger.debug(f"Individual embedding insert failed for {paper_id}: {e2}")
+                logger.info(f"Embeddings stored (fallback): {inserted}/{len(insert_rows)}")
 
     # ─── DAG enforcement ──────────────────────────────────────────────────────
 

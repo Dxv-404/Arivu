@@ -81,6 +81,7 @@ class InheritanceDetector:
         edges: list[tuple[str, str]],
         all_papers: dict[str, Paper],
         graph: nx.DiGraph,
+        progress_callback=None,
     ) -> list[EdgeAnalysis]:
         """
         Run all three stages on a list of (citing_id, cited_id) pairs.
@@ -94,13 +95,56 @@ class InheritanceDetector:
         """
         results: list[EdgeAnalysis] = []
 
-        # Check cache first — avoid re-analyzing edges we've seen before
+        # Check cache first — batch lookup instead of N individual queries.
+        # For 200+ edges, this reduces DB round trips from 200+ to 1.
+        all_edge_ids = [f"{c}:{d}" for c, d in edges]
+        cached_map: dict[str, EdgeAnalysis] = {}
+        try:
+            cached_rows = db.fetchall(
+                """
+                SELECT * FROM edge_analysis
+                WHERE edge_id = ANY(%s) AND model_version = %s
+                """,
+                (all_edge_ids, "1.0.0"),
+            )
+            for row in cached_rows:
+                try:
+                    ea = EdgeAnalysis(
+                        edge_id=row["edge_id"],
+                        citing_paper_id=row["citing_paper_id"],
+                        cited_paper_id=row["cited_paper_id"],
+                        similarity_score=float(row.get("similarity_score", 0)),
+                        citing_sentence=row.get("citing_sentence"),
+                        cited_sentence=row.get("cited_sentence"),
+                        citing_text_source=row.get("citing_text_source", "none"),
+                        cited_text_source=row.get("cited_text_source", "none"),
+                        comparable=bool(row.get("comparable", False)),
+                        mutation_type=row.get("mutation_type", "incidental"),
+                        mutation_confidence=float(row.get("mutation_confidence", 0)),
+                        mutation_evidence=row.get("mutation_evidence", ""),
+                        citation_intent=row.get("citation_intent", "incidental_mention"),
+                        base_confidence=float(row.get("base_confidence", 0)),
+                        signals_used=row.get("signals_used") or [],
+                        llm_classified=bool(row.get("llm_classified", False)),
+                        flagged_by_users=int(row.get("flagged_by_users", 0)),
+                        model_version=row.get("model_version", "1.0.0"),
+                    )
+                    cached_map[ea.edge_id] = ea
+                except Exception as e:
+                    logger.debug(f"Could not reconstruct cached edge: {e}")
+        except Exception as e:
+            logger.debug(f"Batch edge cache lookup failed, falling back to individual: {e}")
+            # Fallback to individual lookups
+            for edge_id in all_edge_ids:
+                cached = self._load_cached_analysis(edge_id)
+                if cached:
+                    cached_map[edge_id] = cached
+
         edges_to_analyze: list[tuple[str, str]] = []
         for citing_id, cited_id in edges:
             edge_id = f"{citing_id}:{cited_id}"
-            cached = self._load_cached_analysis(edge_id)
-            if cached:
-                results.append(cached)
+            if edge_id in cached_map:
+                results.append(cached_map[edge_id])
             else:
                 edges_to_analyze.append((citing_id, cited_id))
 
@@ -112,6 +156,11 @@ class InheritanceDetector:
             return results
 
         # Stage 1: Similarity for all uncached edges
+        if progress_callback:
+            await progress_callback(
+                "analyzing",
+                f"Stage 1: Computing similarity for {len(edges_to_analyze)} edges…"
+            )
         stage1_results = await self._run_stage1_all(edges_to_analyze, all_papers)
 
         # Separate candidates (similarity > threshold) from low-similarity edges
@@ -121,6 +170,11 @@ class InheritanceDetector:
 
         # Stage 2: LLM classification for candidates only
         if candidates and config.GROQ_ENABLED:
+            if progress_callback:
+                await progress_callback(
+                    "analyzing",
+                    f"Stage 2: Classifying {len(candidates)} edges via LLM…"
+                )
             await self._run_stage2_llm(candidates)
         else:
             for r in candidates:
@@ -138,7 +192,12 @@ class InheritanceDetector:
             r["mutation_evidence"] = "Similarity below threshold — incidental citation"
             r["llm_classified"] = False
 
-        # Stage 3: Graph structure validation for all
+        # Stage 3: Graph structure validation
+        if progress_callback:
+            await progress_callback(
+                "computing",
+                f"Stage 3: Validating {len(candidates) + len(low_sim)} edges against graph structure…"
+            )
         # PageRank is computed ONCE here and passed into _run_stage3().
         all_stage_results = candidates + low_sim
         try:
