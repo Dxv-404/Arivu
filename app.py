@@ -572,7 +572,7 @@ def create_app():
               AND EXISTS (
                   SELECT 1 FROM job_events je
                   WHERE je.job_id = bj.job_id
-                    AND je.created_at > NOW() - INTERVAL '1200 seconds'
+                    AND je.created_at > NOW() - INTERVAL '2400 seconds'
               )
             ORDER BY bj.created_at DESC
             LIMIT 1
@@ -804,9 +804,9 @@ def create_app():
             buffer. On Koyeb 0.1 vCPU, builds take 12-15 minutes total.
             """
             sequence = int(last_id_header) if last_id_header.isdigit() else 0
-            deadline = time.time() + 1200   # 20-minute overall timeout (Koyeb 0.1 vCPU builds take 12-15 min)
+            deadline = time.time() + 2400   # 40-minute overall timeout (Koyeb 0.1 vCPU builds take 20-25 min with 500+ LLM batches)
             last_event_time = time.time()   # Track when we last got a real event
-            stall_limit = 1100              # 18+ minutes without events = dead thread
+            stall_limit = 2200              # 36+ minutes without events = dead thread
             last_job_check_time = 0.0       # Rate-limit missed-done DB queries to every 15s
 
             try:
@@ -922,7 +922,7 @@ def create_app():
                     )
                 except Exception:
                     pass
-                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 20 minutes. This paper may have too many references — try a more specific paper.'})}\n\n"
+                yield f"data: {json.dumps({'status': 'timeout', 'message': 'Graph build timed out after 40 minutes. This paper may have too many references — try a more specific paper.'})}\n\n"
 
             except GeneratorExit:
                 # Client disconnected — clean up and exit silently
