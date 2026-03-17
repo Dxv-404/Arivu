@@ -178,7 +178,21 @@ class PruningSystem {
       .attr('stroke-opacity', 0.4)
       .attr('stroke-width', d => 0.5 + (d.similarity_score||0) * 3);
 
-    this._updatePill();
+    // Restore the pill's original HTML structure.
+    // _showPrunedState() replaces innerHTML entirely, destroying the
+    // #prune-pill-count span that _updatePill() depends on.
+    const pill = document.getElementById('prune-pill');
+    if (pill) {
+      pill.innerHTML =
+        '<span id="prune-pill-count">0</span> papers selected ' +
+        '<button id="prune-execute-btn">Simulate removal &rarr;</button> ' +
+        '<button id="prune-clear-btn" aria-label="Clear selection">&times;</button>';
+      pill.classList.add('hidden');
+      // Re-attach listeners since innerHTML replacement destroyed the old elements
+      document.getElementById('prune-execute-btn')?.addEventListener('click', () => this.execute());
+      document.getElementById('prune-clear-btn')?.addEventListener('click', () => this.reset());
+    }
+
     document.getElementById('prune-stats-panel')?.classList.add('hidden');
     if (window._dnaChart) window._dnaChart.resetComparison();
   }

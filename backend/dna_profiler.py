@@ -111,6 +111,13 @@ class DNAProfiler:
         for i, label in enumerate(labels):
             cluster_map.setdefault(int(label), []).append(ordered_ids[i])
 
+        # If consensus clustering produced only 1 cluster, it's not informative
+        # (e.g. all ML papers cluster together). Fall back to field-of-study
+        # distribution which gives the user a more useful breakdown.
+        if len(cluster_map) <= 1:
+            logger.info("Consensus clustering produced ≤1 cluster — using field fallback")
+            return self._field_fallback(seed_paper_id, paper_ids, all_papers)
+
         clusters = []
         for cid, pids in sorted(cluster_map.items()):
             name = self._generate_cluster_label(pids, all_papers)

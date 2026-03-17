@@ -214,7 +214,13 @@ class ArivuGraph {
               .on('end', this._dragEnded.bind(this))
             )
             .on('click', (event, d) => this._handleNodeClick(event, d))
-            .on('dblclick', (event, d) => { if (d.url) window.open(d.url, '_blank'); })
+            .on('dblclick', (event, d) => {
+              // Fallback chain: S2 url → DOI resolver → S2 paper page by ID
+              const target = d.url
+                || (d.doi ? `https://doi.org/${d.doi}` : null)
+                || (d.id  ? `https://www.semanticscholar.org/paper/${d.id}` : null);
+              if (target) window.open(target, '_blank');
+            })
             .on('mouseover', (event, d) => this._tooltipSystem.showNodeTooltip(event, d))
             .on('mouseout', () => this._tooltipSystem.hide())
             .on('keydown', (event, d) => this._handleNodeKeydown(event, d));

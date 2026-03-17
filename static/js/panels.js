@@ -167,6 +167,16 @@ class DNAChart {
   resetComparison() {
     const panel = document.getElementById('dna-comparison');
     if (panel) panel.style.display = 'none';
+
+    // Restore the original donut chart data.
+    // renderComparison() updates the main donut with "after" pruning data,
+    // so we must revert it from the snapshot taken before pruning.
+    if (this.beforeSnapshot && this.chart) {
+      this.chart.data.labels = this.beforeSnapshot.labels;
+      this.chart.data.datasets[0].data = this.beforeSnapshot.data;
+      this.chart.data.datasets[0].backgroundColor = this.beforeSnapshot.colors;
+      this.chart.update('active');
+    }
     this.beforeSnapshot = null;
   }
 }
