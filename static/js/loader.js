@@ -34,6 +34,7 @@ class GraphLoader {
 
     this.eventSource.addEventListener('message', (e) => {
       this._lastEventTime = Date.now();
+      this._reconnectCount = 0;  // Reset reconnect counter on successful data
       try { this._handleEvent(JSON.parse(e.data)); } catch(err) { console.error('SSE parse error', err); }
     });
 
@@ -42,10 +43,24 @@ class GraphLoader {
       // may fire a final 'error' event with readyState=CLOSED. Suppress it
       // so it doesn't overwrite the retry progress message.
       if (this._intentionalClose) return;
+
       if (this.eventSource.readyState === EventSource.CLOSED) {
-        clearInterval(this._stallTimer);
-        this._showError('Connection to server was lost. Please refresh.');
+        // Koyeb's proxy may send a 502/504 when its request timeout (~300s)
+        // is hit, which causes EventSource to go straight to CLOSED instead
+        // of CONNECTING.  Auto-retry up to 3 times with a fresh EventSource.
+        this._reconnectCount = (this._reconnectCount || 0) + 1;
+        if (this._reconnectCount <= 3) {
+          console.log(`[Arivu] SSE connection closed by proxy — retry ${this._reconnectCount}/3`);
+          this._updateProgress('🔄', `Reconnecting to server (attempt ${this._reconnectCount}/3)...`, null);
+          this.eventSource.close();
+          this._intentionalClose = true;
+          setTimeout(() => this.start(), 2000);
+        } else {
+          clearInterval(this._stallTimer);
+          this._showError('Connection to server was lost after multiple retries. Please refresh.');
+        }
       }
+      // readyState === CONNECTING: browser is auto-reconnecting — do nothing
     });
   }
 
@@ -294,7 +309,7 @@ class GraphLoader {
     const log = document.getElementById('progress-log');
     if (iconEl) iconEl.textContent = icon;
     if (msgEl) msgEl.textContent = message;
-    if (bar) { bar.style.width = `${pct}%`; bar.parentElement?.setAttribute('aria-valuenow', pct); }
+    if (bar && pct != null) { bar.style.width = `${pct}%`; bar.parentElement?.setAttribute('aria-valuenow', pct); }
     if (log) {
       const entry = document.createElement('div');
       entry.className = 'log-entry';
