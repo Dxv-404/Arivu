@@ -605,7 +605,15 @@ def create_app():
             # Fresh build required — apply rate limit NOW (not for cache hits or reconnects)
             allowed, headers = rate_limiter.check_sync(session_id, "GET /api/graph/stream")
             if not allowed:
-                return jsonify(rate_limiter.get_429_body(headers)), 429, headers
+                # Return rate limit as SSE event — EventSource rejects non-SSE
+                # responses (JSON 429) with immediate CLOSED, causing silent retry loops.
+                def _rate_limit_stream():
+                    yield f"data: {json.dumps({'status': 'error', 'message': 'Too many graph builds. Please wait a minute before trying again.', 'retry': False})}\n\n"
+                return Response(
+                    stream_with_context(_rate_limit_stream()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
 
             # No existing build — create new job and start background thread.
             # Dedup: use INSERT...SELECT WHERE NOT EXISTS to avoid duplicates
