@@ -116,6 +116,7 @@ REQUIRED_TABLES = {
     "chat_history",
     "insight_cache",
     "background_jobs",
+    "pathfinder_prompts",
 }
 
 # ---------------------------------------------------------------------------
@@ -373,6 +374,7 @@ ALTER TABLE graphs ADD COLUMN IF NOT EXISTS leaderboard_json JSONB;
 ALTER TABLE graphs ADD COLUMN IF NOT EXISTS dna_json JSONB;
 ALTER TABLE graphs ADD COLUMN IF NOT EXISTS diversity_json JSONB;
 ALTER TABLE graphs ADD COLUMN IF NOT EXISTS computed_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE graphs ADD COLUMN IF NOT EXISTS intel_json JSONB;
 
 CREATE TABLE IF NOT EXISTS insights (
     insight_id   SERIAL PRIMARY KEY,
@@ -453,6 +455,30 @@ CREATE TABLE IF NOT EXISTS session_graphs (
 );
 CREATE INDEX IF NOT EXISTS idx_sgs_session
     ON session_graphs(session_id, created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Pathfinder prompts (research position analysis + conversation history)
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS pathfinder_prompts (
+    id              SERIAL      PRIMARY KEY,
+    session_id      TEXT        NOT NULL,
+    graph_id        TEXT        NOT NULL,
+    prompt          TEXT        NOT NULL,
+    prompt_type     TEXT        DEFAULT 'unknown',
+    classification  TEXT        DEFAULT 'valid',
+    output_json     JSONB,
+    similar_papers  JSONB,
+    model_used      TEXT,
+    energy_cost     INTEGER     DEFAULT 1,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pf_session_graph ON pathfinder_prompts(session_id, graph_id);
+CREATE INDEX IF NOT EXISTS idx_pf_created ON pathfinder_prompts(created_at DESC);
+
+-- Pathfinder schema additions (embedding column for semantic dedup)
+ALTER TABLE pathfinder_prompts ADD COLUMN IF NOT EXISTS embedding vector(384);
+ALTER TABLE pathfinder_prompts ADD COLUMN IF NOT EXISTS seed_paper_title TEXT;
 """
 
 
