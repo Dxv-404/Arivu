@@ -10,7 +10,7 @@ import threading
 from threading import Thread
 from typing import Optional
 
-from flask import Flask, Response, g, jsonify, make_response, render_template, request, stream_with_context
+from flask import Flask, Response, g, jsonify, make_response, redirect, render_template, request, stream_with_context, url_for
 from flask_cors import CORS
 
 from backend.config import Config, config
@@ -19,7 +19,7 @@ from backend.session_manager import require_session
 from backend.rate_limiter import arivu_rate_limiter as rate_limiter
 import backend.db as db
 from backend.utils import (
-    await_sync, load_gallery_index, load_precomputed_graph, log_action,
+    await_sync, log_action,
 )
 from backend.pruning import compute_pruning_result
 from backend.dna_profiler import DNAProfiler
@@ -3859,14 +3859,19 @@ RULES:
         paper_id = request.args.get("paper_id", "")
         return render_template("tool.html", paper_id=paper_id)
 
+    # Gallery/explore routes removed — all papers go through the full build pipeline now.
+    # Precomputed gallery graphs were small demos (16-50 papers) that gave an inferior
+    # experience compared to fresh builds (400-600 papers). Users searching for famous
+    # papers like ResNet or BERT now get the full build, same as any other paper.
+
     @app.route("/explore")
     def explore():
-        """Gallery page showing precomputed graphs."""
-        return render_template("explore.html")
+        """Redirect explore to home — gallery removed."""
+        return redirect(url_for("index"))
 
     @app.route("/explore/<slug>")
     def explore_slug(slug: str):
-        """Gallery entry page — loads precomputed graph directly."""
+        """Redirect gallery slugs to search — gallery removed."""
         VALID_SLUGS = {"attention", "alexnet", "bert", "gans",
                        "word2vec", "resnet", "gpt2"}
         if slug not in VALID_SLUGS:
@@ -3877,80 +3882,18 @@ RULES:
 
     @app.route("/static/previews/<slug>/graph.json")
     def gallery_graph_json(slug: str):
-        """Proxy precomputed graph JSON from R2 for gallery entries."""
-        VALID_SLUGS = {"attention", "alexnet", "bert", "gans",
-                       "word2vec", "resnet", "gpt2"}
-        if slug not in VALID_SLUGS:
-            return jsonify({"error": "Not found"}), 404
-        try:
-            from backend.r2_client import R2Client
-            r2 = R2Client()
-            data = r2.get_json(f"precomputed/{slug}/graph.json")
-            if data is None:
-                # Fallback: try loading from local precomputed files
-                local_data = load_precomputed_graph(slug)
-                if local_data:
-                    return Response(
-                        json.dumps(local_data),
-                        mimetype="application/json",
-                        headers={"Cache-Control": "public, max-age=3600"},
-                    )
-                return jsonify({"error": "Preview not yet computed. Run precompute_gallery.py."}), 404
-            return Response(
-                json.dumps(data) if isinstance(data, dict) else data,
-                mimetype="application/json",
-                headers={"Cache-Control": "public, max-age=3600"},
-            )
-        except Exception:
-            # Fallback to local files
-            local_data = load_precomputed_graph(slug)
-            if local_data:
-                return Response(
-                    json.dumps(local_data),
-                    mimetype="application/json",
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
-            return jsonify({"error": "Preview not yet computed. Run precompute_gallery.py."}), 404
+        """Gallery removed — return 404."""
+        return jsonify({"error": "Gallery removed. Use search to build full graphs."}), 404
 
     @app.route("/static/previews/<slug>.svg")
-    def gallery_preview_svg(slug: str):
-        """Proxy precomputed SVG preview from R2 for gallery cards."""
-        VALID_SLUGS = {"attention", "alexnet", "bert", "gans",
-                       "word2vec", "resnet", "gpt2"}
-        if slug not in VALID_SLUGS:
-            return "", 404
-        try:
-            from backend.r2_client import R2Client
-            r2 = R2Client()
-            svg_data = r2.get(f"precomputed/{slug}/preview.svg")
-            if svg_data is None:
-                return "", 404
-            return Response(
-                svg_data,
-                mimetype="image/svg+xml",
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-        except Exception:
-            return "", 404
-
-    # ── Gallery index route (Phase 4) ─────────────────────────────────────
+    def gallery_preview_svg_stub(slug: str):
+        """Gallery removed — return 404."""
+        return "", 404
 
     @app.route("/static/gallery_index.json")
-    def gallery_index_json():
-        """
-        Serve data/gallery_index.json for the explore page stats overlay.
-        explore.html fetches this to update hardcoded placeholder numbers
-        with real precomputed stats after precompute_gallery.py runs.
-        """
-        import pathlib
-        path = pathlib.Path("data/gallery_index.json")
-        if not path.exists():
-            return jsonify([]), 404
-        return app.response_class(
-            response=path.read_text(encoding="utf-8"),
-            mimetype="application/json",
-            headers={"Cache-Control": "public, max-age=300"},
-        )
+    def gallery_index_json_stub():
+        """Gallery removed — return empty."""
+        return jsonify([])
 
     # ── Phase 5 routes ───────────────────────────────────────────────────────
 

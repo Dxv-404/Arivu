@@ -33,7 +33,7 @@
   <header class="tool-header-v2">
     <a href="/" class="brand-wordmark" style="text-decoration:none;color:inherit">Arivu</a>
     <div class="header-right-v2">
-      <a href="/explore" class="nav-link">Explore</a>
+      <!-- Gallery removed -->
       {% if g.user %}
         <a href="/account" class="user-avatar-btn" title="{{ g.user.display_name or g.user.email.split('@')[0] }}">
           {{ (g.user.display_name or g.user.email.split('@')[0])[:1] | upper }}
@@ -322,7 +322,7 @@
 <script>
   window.ARIVU_CONFIG = {
     paperId: "{{ paper_id | e }}",
-    isGallery: {{ 'true' if is_gallery is defined and is_gallery else 'false' }}
+    isGallery: false
   };
 </script>
 <script src="{{ url_for('static', filename='js/api.js') }}" defer></script>

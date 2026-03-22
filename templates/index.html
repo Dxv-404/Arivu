@@ -15,14 +15,11 @@
       </svg>
     </div>
     <h1>What if this paper<br>never existed?</h1>
-    <p class="hero-subtitle">Watch <span id="demo-count">47</span> papers lose their foundation.</p>
-    <button id="show-me-btn" class="btn-primary btn-large">Show me</button>
+    <p class="hero-subtitle">Trace the intellectual DNA of any research paper.</p>
   </div>
-
-  <div id="demo-graph-container" aria-hidden="true"></div>
 </section>
 
-<section id="search-section" class="hidden" aria-label="Search for a paper">
+<section id="search-section" aria-label="Search for a paper">
   <div class="search-wrapper">
     <h2>Trace any paper's ancestry</h2>
     <div class="search-box-wrapper">
@@ -38,37 +35,6 @@
       <span class="search-icon" aria-hidden="true">&#x2315;</span>
     </div>
     <div id="search-results" class="hidden" role="listbox" aria-label="Search suggestions"></div>
-
-    <div id="gallery-cards" aria-label="Featured papers">
-      <p class="gallery-label">Or explore a precomputed lineage:</p>
-      <div class="cards-row">
-        <a href="/explore/attention" class="gallery-card">
-          <span class="card-year">2017</span>
-          <span class="card-title">Attention Is All You Need</span>
-          <span class="card-stat">152 papers</span>
-        </a>
-        <a href="/explore/bert" class="gallery-card">
-          <span class="card-year">2018</span>
-          <span class="card-title">BERT</span>
-          <span class="card-stat">198 papers</span>
-        </a>
-        <a href="/explore/alexnet" class="gallery-card">
-          <span class="card-year">2012</span>
-          <span class="card-title">AlexNet</span>
-          <span class="card-stat">87 papers</span>
-        </a>
-        <a href="/explore/gans" class="gallery-card">
-          <span class="card-year">2014</span>
-          <span class="card-title">Generative Adversarial Networks</span>
-          <span class="card-stat">134 papers</span>
-        </a>
-        <a href="/explore/resnet" class="gallery-card">
-          <span class="card-year">2015</span>
-          <span class="card-title">Deep Residual Learning</span>
-          <span class="card-stat">111 papers</span>
-        </a>
-      </div>
-    </div>
   </div>
 </section>
 
@@ -79,8 +45,4 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/api.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/graph.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/pruning.js') }}" defer></script>
-<!-- CONFLICT-002 resolved: using landing-demo.js, not index.js -->
-<script src="{{ url_for('static', filename='js/landing-demo.js') }}" defer></script>
 {% endblock %}
