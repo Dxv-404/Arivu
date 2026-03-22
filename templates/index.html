@@ -45,4 +45,9 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/api.js') }}" defer></script>
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    if (typeof PaperSearch !== 'undefined') new PaperSearch();
+  });
+</script>
 {% endblock %}
