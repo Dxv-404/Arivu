@@ -188,3 +188,5 @@ Commit message wording is a process requirement only, not functional.
 **Rationale:** Edges in the 0.25–0.35 similarity range rarely produce meaningful LLM classifications — they almost always resolve to "incidental". Skipping them saves ~30% of Groq calls. Larger batches reduce per-call overhead. The 0.35 threshold matches the confidence tier LOW boundary (≥0.35), creating a clean conceptual alignment.
 **Spec deviation:** CLAUDE.md Part 9 explicitly states NLP_SIMILARITY_THRESHOLD default is 0.25. This is an intentional user-requested performance optimization. Logged here per Part 3.3 drift detection protocol.
 **Implications:** Edges with similarity 0.25–0.35 are auto-classified as "incidental" without LLM review. Classification quality for these borderline edges is lower, but they were unlikely to receive meaningful classifications anyway.
+
+

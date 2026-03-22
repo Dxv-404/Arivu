@@ -122,6 +122,9 @@ class GraphLoader {
 
   _initGraph(graphData) {
     try {
+    // Clear stale prune state from previous graph
+    window._lastPruneResult = null;
+
     // After graph resolution, update paperId to the canonical seed_paper_id
     // (the S2 ID). The user may have entered a DOI, arXiv ID, or title —
     // the graph engine resolves it to an S2 paper_id stored as seed_paper_id.
@@ -141,16 +144,124 @@ class GraphLoader {
 
     const pruning = new PruningSystem(this._graph);
 
-    // Update header
+    // Listen for orphan highlight requests — works in both force and tree views
+    window.addEventListener('arivu:highlight-node', (e) => {
+      const paperId = e.detail?.paperId;
+      if (!paperId) return;
+
+      // Check which view is active
+      const currentView = document.querySelector('.view-btn.active')?.dataset?.view;
+
+      if (currentView === 'tree' && window._treeLayout && window._treeLayout.nodeGroup) {
+        // Highlight in tree view
+        const treeNode = window._treeLayout.nodeGroup.select(`g.tree-node[data-id="${paperId}"]`);
+        if (!treeNode.empty()) {
+          treeNode.select('rect')
+            .transition().duration(600)
+            .attr('stroke', '#D4A843')
+            .attr('stroke-width', 3);
+          // Auto-remove after 4 seconds
+          setTimeout(() => {
+            treeNode.select('rect')
+              .transition().duration(300)
+              .attr('stroke', '#6B7280')
+              .attr('stroke-width', 0.5);
+          }, 4000);
+          // Zoom to the node
+          if (window._treeLayout.svg) {
+            const transform = treeNode.attr('transform');
+            if (transform) {
+              const match = transform.match(/translate\(([^,]+),([^)]+)\)/);
+              if (match) {
+                const [, x, y] = match.map(Number);
+                const { width, height } = window._treeLayout.container.getBoundingClientRect();
+                window._treeLayout.svg.transition().duration(500).call(
+                  window._treeLayout.zoom.transform,
+                  d3.zoomIdentity.translate(width/2 - x*2, height/2 - y*2).scale(2)
+                );
+              }
+            }
+          }
+        }
+      } else if (window._arivuGraph) {
+        // Highlight in force graph view
+        const nodeData = window._arivuGraph.allNodes?.find(n => n.id === paperId);
+        if (nodeData) {
+          window._arivuGraph.highlightNode(nodeData, { pulse: true });
+          setTimeout(() => window._arivuGraph.removeHighlight(nodeData), 4000);
+        }
+      }
+    });
+
+    // Update header (v1 compat)
     const headerInfo = document.getElementById('header-paper-info');
     if (headerInfo && graphData.metadata) {
       headerInfo.textContent = graphData.metadata.seed_paper_title || '';
     }
 
-    // Populate panels
-    this._panel.renderDNAProfile(graphData.dna_profile);
-    this._panel.renderDiversityScore(graphData.diversity_score);
+    // Update paper info row (v2 redesign)
+    const seedNode = graphData.nodes?.find(n => n.is_seed);
+    const titleEl = document.getElementById('paper-title-text');
+    const authorEl = document.getElementById('paper-author-text');
+    if (titleEl && graphData.metadata) {
+      const year = seedNode?.year || '';
+      titleEl.textContent = `${graphData.metadata.seed_paper_title || 'Unknown Paper'}${year ? ` (${year})` : ''}`;
+    }
+    if (authorEl && seedNode) {
+      const authors = (seedNode.authors || []).slice(0, 3).join(', ');
+      const suffix = (seedNode.authors || []).length > 3 ? ' et al.' : '';
+      const citations = (seedNode.citation_count || 0).toLocaleString();
+      authorEl.textContent = `${authors}${suffix} \u00B7 ${citations} citations`;
+    }
+
+    // Update bottom bar summary with real data
+    const summaryEl = document.getElementById('bottom-bar-summary');
+    if (summaryEl) {
+      const nodeCount = graphData.nodes?.length || 0;
+      summaryEl.textContent = `Orphan Ideas \u00B7 Data Coverage \u00B7 ${nodeCount} papers`;
+    }
+
+    // Populate panels — DNA and diversity may be missing on fresh builds
+    // (computed after the SSE 'done' event in _on_graph_complete).
+    // If missing, poll for them after a delay.
+    if (graphData.dna_profile) {
+      this._panel.renderDNAProfile(graphData.dna_profile);
+    }
+    if (graphData.diversity_score) {
+      this._panel.renderDiversityScore(graphData.diversity_score);
+    }
     if (graphData.leaderboard) this._panel.populateLeaderboard(graphData.leaderboard);
+
+    if (!graphData.dna_profile || !graphData.diversity_score || !graphData.leaderboard) {
+      // Fresh build: DNA/diversity computed post-SSE. Poll the panel data endpoint.
+      const graphId = graphData.metadata?.graph_id;
+      if (graphId) {
+        const pollPanelData = (attempt) => {
+          if (attempt > 5) return; // give up after 5 tries
+          setTimeout(() => {
+            fetch(`/api/graph/${encodeURIComponent(graphId)}/panel-data`)
+              .then(r => r.ok ? r.json() : null)
+              .then(data => {
+                if (!data) { pollPanelData(attempt + 1); return; }
+                if (data.dna_profile && !graphData.dna_profile) {
+                  graphData.dna_profile = data.dna_profile;
+                  this._panel.renderDNAProfile(data.dna_profile);
+                }
+                if (data.diversity_score && !graphData.diversity_score) {
+                  graphData.diversity_score = data.diversity_score;
+                  this._panel.renderDiversityScore(data.diversity_score);
+                }
+                if (data.leaderboard && !graphData.leaderboard) {
+                  graphData.leaderboard = data.leaderboard;
+                  this._panel.populateLeaderboard(data.leaderboard);
+                }
+              })
+              .catch(() => pollPanelData(attempt + 1));
+          }, 3000 * attempt); // 3s, 6s, 9s, 12s, 15s
+        };
+        pollPanelData(1);
+      }
+    }
 
     // Load orphans
     fetch(`/api/orphans/${encodeURIComponent(this.paperId)}`)
@@ -163,46 +274,58 @@ class GraphLoader {
       .then(data => { if (data) this._renderCoverage(data); })
       .catch(() => {});
 
-    // Leaderboard toggle
-    document.getElementById('leaderboard-toggle')?.addEventListener('click', () => {
-      const sidebar = document.getElementById('leaderboard-sidebar');
-      const isOpen = sidebar.classList.toggle('open');
-      sidebar.setAttribute('aria-hidden', String(!isOpen));
-    });
+    // Leaderboard toggle — only bind if v1 layout (sidebar-rail absent)
+    // In v2, sidebar.js handles opening the leaderboard slide-out panel.
+    if (!document.querySelector('.sidebar-rail')) {
+      document.getElementById('leaderboard-toggle')?.addEventListener('click', () => {
+        const sidebar = document.getElementById('leaderboard-sidebar');
+        const isOpen = sidebar.classList.toggle('open');
+        sidebar.setAttribute('aria-hidden', String(!isOpen));
+      });
+    }
 
-    // Genealogy button
-    document.getElementById('genealogy-btn')?.addEventListener('click', async () => {
-      const modal = document.getElementById('genealogy-modal');
-      const content = document.getElementById('genealogy-content');
-      content.textContent = 'Generating genealogy narrative…';
-      modal.showModal();
-      try {
-        const resp = await fetch(`/api/genealogy/${encodeURIComponent(this.paperId)}`);
-        const data = await resp.json();
-        if (data.narrative) {
-          content.textContent = data.narrative;
-        } else if (data.error === 'LLM not configured') {
-          content.textContent = 'Genealogy stories require an AI language model (Groq). The service is not configured on this instance.';
-        } else {
-          content.textContent = data.error || 'No narrative available. The graph may still be loading.';
+    // Genealogy button — only bind if v1 layout (sidebar.js handles it in v2)
+    if (!document.querySelector('.sidebar-rail')) {
+      document.getElementById('genealogy-btn')?.addEventListener('click', async () => {
+        const modal = document.getElementById('genealogy-modal');
+        const content = document.getElementById('genealogy-content');
+        content.textContent = 'Generating genealogy narrative…';
+        modal.showModal();
+        try {
+          const resp = await fetch(`/api/genealogy/${encodeURIComponent(this.paperId)}`);
+          const data = await resp.json();
+          if (data.narrative) {
+            content.textContent = data.narrative;
+          } else if (data.error === 'LLM not configured') {
+            content.textContent = 'Genealogy stories require an AI language model (Groq). The service is not configured on this instance.';
+          } else {
+            content.textContent = data.error || 'No narrative available. The graph may still be loading.';
+          }
+        } catch (err) {
+          content.textContent = 'Failed to generate genealogy narrative. Please try again.';
         }
-      } catch (err) {
-        content.textContent = 'Failed to generate genealogy narrative. Please try again.';
-      }
-    });
-    document.getElementById('genealogy-close')?.addEventListener('click', () => {
-      document.getElementById('genealogy-modal').close();
-    });
+      });
+      document.getElementById('genealogy-close')?.addEventListener('click', () => {
+        document.getElementById('genealogy-modal').close();
+      });
+    }
 
     // Chat guide
     this._initChat(graphData.metadata || {});
 
-    // Accessibility table view
-    document.getElementById('accessibility-toggle')?.addEventListener('click', () => {
-      const tv = document.getElementById('table-view');
-      tv.hidden = !tv.hidden;
-      if (!tv.hidden) this._populateTableView(graphData);
-    });
+    // Accessibility table view — only bind if v1 layout (sidebar.js handles it in v2)
+    if (!document.querySelector('.sidebar-rail')) {
+      document.getElementById('accessibility-toggle')?.addEventListener('click', () => {
+        const tv = document.getElementById('table-view');
+        tv.hidden = !tv.hidden;
+        if (!tv.hidden) this._populateTableView(graphData);
+      });
+    }
+    // Store graphData for sidebar.js table-view access
+    this._graphData = graphData;
+
+    // Notify deep intelligence module that graph data is ready
+    window.dispatchEvent(new CustomEvent('arivu:graph-ready', { detail: { graphData } }));
 
     // Initialise semantic zoom AFTER graph renders and node positions settle
     if (window.SemanticZoomRenderer && window._arivuGraph && graphData.dna_profile?.clusters) {
@@ -218,6 +341,80 @@ class GraphLoader {
       exportPanel.render();
     }
 
+    // Background pregeneration of intel content for Blind Spots & Battles.
+    // For existing cached graphs that don't have intel_json yet, this silently
+    // generates all LLM content in the background so windows open instantly.
+    // For new graphs, _on_graph_complete() handles pregeneration server-side.
+    if (graphData.metadata?.graph_id && window.BlindspotAnalyzer) {
+      setTimeout(() => {
+        try {
+          const gid = graphData.metadata.graph_id;
+          // Check if intel already exists
+          fetch(`/api/graph/${encodeURIComponent(gid)}/panel-data`)
+            .then(r => r.ok ? r.json() : null)
+            .then(panelData => {
+              // If intel_json is already populated, skip
+              // We can't check intel_json directly from panel-data, so just
+              // try the pregenerate endpoint — it will bail if already cached
+              const analyzer = new BlindspotAnalyzer(graphData);
+              const result = analyzer.analyze();
+              window._blindspotResult = result;
+
+              // Fire pregeneration in background (non-blocking)
+              fetch(`/api/graph/${encodeURIComponent(gid)}/intel-pregenerate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  stats: result.stats,
+                  disputes: result.disputes.slice(0, 5).map(d => ({
+                    paperA: d.paperA,
+                    paperB: d.paperB,
+                    isResolved: d.isResolved,
+                    winner: d.winner,
+                  })),
+                  blindSpots: result.blindSpots.slice(0, 5).map(s => ({
+                    name: s.name,
+                    paperCount: s.paperCount,
+                    edgeCount: s.edgeCount,
+                    coverage: s.coverage,
+                    status: s.status,
+                    topPapers: s.topPapers,
+                  })),
+                }),
+              }).catch(() => {}); // Silently ignore errors
+            })
+            .catch(() => {});
+        } catch (e) {
+          // Non-fatal — intel will be lazy-generated on window open
+        }
+      }, 5000); // Wait 5 seconds after graph load to not compete with initial rendering
+    }
+
+    // Auto-switch to tree layout if the v2 redesign sets tree as default view.
+    // The ArivuGraph force layout renders first; we hide it and show tree.
+    if (document.querySelector('.tool-layout-v2') && window._arivuGraph) {
+      setTimeout(() => {
+        const container = document.getElementById('graph-svg-container');
+        if (!container) return;
+        // Create tree layout
+        if (!window._treeLayout && typeof TreeLayout !== 'undefined') {
+          window._treeLayout = new TreeLayout(container, {
+            nodes: window._arivuGraph.allNodes,
+            edges: window._arivuGraph.allEdges,
+            metadata: window._arivuGraph.metadata
+          });
+        }
+        // Hide force-directed SVG, show tree
+        const forceSvg = container.querySelector('svg:not(.tree-svg)');
+        if (forceSvg) forceSvg.style.display = 'none';
+      }, 2600); // After the force simulation's initial zoom-to-fit (2500ms)
+    }
+
+    // Dispatch graph-loaded event for Pathfinder and other systems
+    window.dispatchEvent(new CustomEvent('arivu:graph-loaded', {
+      detail: { graphData: graphData }
+    }));
+
     } catch (err) {
       console.error('Graph initialization error:', err);
       this._showError(`Graph loaded but failed to render: ${err.message}. Please refresh.`);
@@ -230,14 +427,61 @@ class GraphLoader {
     const messages = document.getElementById('chat-messages');
     if (!input || !send || !messages) return;
 
+    // Pathfinder suggestion detection keywords
+    const PF_KEYWORDS = [
+      'where do i fit', 'my research is about', 'i am working on',
+      'my position', 'find my place', 'how does my work relate',
+      'i want to build a paper', 'my paper is about',
+      'i want to use pathfinder', 'open pathfinder', 'pathfinder'
+    ];
+    const ACADEMIC_KW = ['abstract', 'propose', 'methodology', 'experimental', 'approach', 'evaluate', 'demonstrate', 'framework'];
+
     const sendMessage = async () => {
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
       send.disabled = true;
 
-      messages.innerHTML += `<div style="text-align:right;margin-bottom:6px;font-size:0.85rem;color:var(--text-primary)">${text}</div>`;
+      const userMsgDiv = document.createElement('div');
+      userMsgDiv.style.cssText = 'text-align:right;margin-bottom:6px;font-size:0.85rem;color:var(--text-primary)';
+      userMsgDiv.textContent = text;
+      messages.appendChild(userMsgDiv);
       messages.scrollTop = messages.scrollHeight;
+
+      // Check for Pathfinder-worthy prompts BEFORE sending to chat
+      const textLower = text.toLowerCase();
+      const isPositionQuery = PF_KEYWORDS.some(kw => textLower.includes(kw));
+      const wordCount = text.split(/\s+/).length;
+      const academicMatches = ACADEMIC_KW.filter(kw => textLower.includes(kw)).length;
+      const isAbstract = wordCount > 100 && academicMatches >= 2;
+
+      if (isPositionQuery || isAbstract) {
+        const replyDiv = document.createElement('div');
+        replyDiv.style.cssText = 'margin-bottom:8px;font-size:0.85rem;color:var(--text-secondary)';
+        replyDiv.innerHTML = (isAbstract
+          ? 'That looks like an abstract! The Pathfinder can run a full analysis with competitive landscape, reading roadmap, and citation recommendations.'
+          : 'This sounds like a research positioning question. The Pathfinder can give you a detailed analysis.'
+        ) + '<br><button class="pf-chat-suggest" style="margin-top:8px;padding:6px 14px;background:#374151;color:white;border:none;border-radius:4px;font:600 11px \'JetBrains Mono\',monospace;cursor:pointer;">Take me to Pathfinder →</button>';
+        messages.appendChild(replyDiv);
+        messages.scrollTop = messages.scrollHeight;
+
+        replyDiv.querySelector('.pf-chat-suggest')?.addEventListener('click', () => {
+          // Switch to researcher dot
+          window._dotSwitcher?.switchTo('dna', 3);
+          // Open pathfinder window after dot switch
+          setTimeout(() => {
+            window._windowManager?.openWindow('pathfinder');
+            // Pre-fill input
+            setTimeout(() => {
+              const pfInput = document.getElementById('pf-input-initial') || document.getElementById('pf-input');
+              if (pfInput) { pfInput.value = text; pfInput.focus(); }
+            }, 500);
+          }, 300);
+        });
+
+        send.disabled = false;
+        return; // Don't send to chat backend
+      }
 
       try {
         const resp = await fetch('/api/chat', {
@@ -247,7 +491,27 @@ class GraphLoader {
         });
         const data = await resp.json();
         const reply = data.response || 'No response.';
-        messages.innerHTML += `<div style="margin-bottom:8px;font-size:0.85rem;color:var(--text-secondary)">${reply}</div>`;
+        const replyDiv = document.createElement('div');
+        replyDiv.style.cssText = 'margin-bottom:8px;font-size:0.85rem;color:var(--text-secondary)';
+
+        // Check for Pathfinder suggestion from backend
+        if (data.pathfinder_suggestion) {
+          replyDiv.innerHTML = reply.replace('[PATHFINDER_SUGGESTION]',
+            '<br><button class="pf-chat-suggest" style="margin-top:8px;padding:6px 14px;background:#374151;color:white;border:none;border-radius:4px;font:600 11px \'JetBrains Mono\',monospace;cursor:pointer;">Take me to Pathfinder →</button>'
+          );
+        } else {
+          replyDiv.textContent = reply;
+        }
+        messages.appendChild(replyDiv);
+
+        // Wire Pathfinder suggestion button if present
+        const pfBtn = replyDiv.querySelector('.pf-chat-suggest');
+        if (pfBtn) {
+          pfBtn.addEventListener('click', () => {
+            if (window._dotSwitcher) window._dotSwitcher.switchTo('dna', 3);
+            if (window._windowManager) window._windowManager.openWindow('pathfinder');
+          });
+        }
       } catch (err) {
         messages.innerHTML += `<div style="margin-bottom:8px;font-size:0.85rem;color:var(--danger)">Failed to get response. Please try again.</div>`;
       }
@@ -322,7 +586,20 @@ class GraphLoader {
 
   _showError(msg) {
     const overlay = document.getElementById('loading-overlay');
-    if (overlay) overlay.innerHTML = `<div class="loading-inner"><p style="color:var(--danger)">${msg}</p><a href="/" style="color:var(--accent-blue)">← Back to search</a></div>`;
+    if (!overlay) return;
+    const inner = document.createElement('div');
+    inner.className = 'loading-inner';
+    const p = document.createElement('p');
+    p.style.color = 'var(--danger)';
+    p.textContent = msg;
+    const a = document.createElement('a');
+    a.href = '/';
+    a.style.color = 'var(--accent-blue)';
+    a.textContent = '\u2190 Back to search';
+    inner.appendChild(p);
+    inner.appendChild(a);
+    overlay.innerHTML = '';
+    overlay.appendChild(inner);
   }
 }
 
@@ -344,25 +621,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (cfg.isGallery) {
     // Gallery: load precomputed JSON directly
+    const loader = new GraphLoader(cfg.paperId);
+    window._graphLoader = loader;
     fetch(`/static/previews/${cfg.paperId}/graph.json`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(g => new GraphLoader(cfg.paperId)._initGraph(g))
+      .then(g => loader._initGraph(g))
       .catch(() => {
         // Precomputed graph not available — fall back to SSE build with real S2 ID
         const realId = GALLERY_S2_IDS[cfg.paperId];
         if (realId) {
-          new GraphLoader(realId).start();
+          const fallbackLoader = new GraphLoader(realId);
+          window._graphLoader = fallbackLoader;
+          fallbackLoader.start();
         } else {
           // Unknown slug — show error instead of hanging
           const overlay = document.getElementById('loading-overlay');
           if (overlay) overlay.innerHTML = '<div class="loading-inner"><p style="color:var(--danger)">This gallery paper has not been precomputed yet. Building graph from scratch...</p></div>';
-          new GraphLoader(cfg.paperId).start();
+          const fallbackLoader = new GraphLoader(cfg.paperId);
+          window._graphLoader = fallbackLoader;
+          fallbackLoader.start();
         }
       });
   } else {
-    new GraphLoader(cfg.paperId).start();
+    const loader = new GraphLoader(cfg.paperId);
+    window._graphLoader = loader;
+    loader.start();
   }
 });

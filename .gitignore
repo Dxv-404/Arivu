@@ -43,3 +43,10 @@ flask_log.txt
 flask_test.log
 server.log
 *.log
+
+# Internal planning/spec files
+PATHFINDER.md
+PATHFINDER_FIX_PLAN.md
+
+# Raw researcher sprite source images
+researcher_images/

@@ -2,38 +2,85 @@
 
 {% block title %}Arivu — Research Ancestry{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tool-redesign.css') }}">
+{% endblock %}
+
 {% block body %}
-<div class="tool-layout">
+<div class="tool-layout-v2">
 
-  <!-- HEADER -->
-  <header class="tool-header">
-    <div style="display:flex;align-items:center;gap:12px">
-      <a href="/" class="logo-link" aria-label="Arivu home" title="Back to search"
-         style="display:flex;align-items:center;gap:6px;text-decoration:none;color:var(--text-secondary);font-size:0.85rem">
-        <span style="font-size:1.1rem">&larr;</span>
-        <svg width="72" height="20" viewBox="0 0 72 20" aria-hidden="true">
-          <text x="0" y="16" font-family="Inter" font-weight="700" font-size="18"
-                fill="#D4A843" letter-spacing="-0.5">arivu</text>
-        </svg>
-      </a>
-    </div>
+  <!-- ═══════ SIDEBAR RAIL ═══════ -->
+  <nav class="sidebar-rail" aria-label="Tool panels">
+    <button class="sidebar-btn" data-panel="panel-chat" data-tooltip="Chat"
+            aria-label="Open chat panel">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+    </button>
+    <button class="sidebar-btn" data-panel="genealogy" data-tooltip="Genealogy Story"
+            aria-label="Open genealogy story" id="genealogy-btn">
+      <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+    </button>
+    <button class="sidebar-btn" data-panel="panel-leaderboard" data-tooltip="Impact Leaderboard"
+            aria-label="Open impact leaderboard" id="leaderboard-toggle">
+      <svg viewBox="0 0 24 24"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+    </button>
+    <button class="sidebar-btn" data-panel="table-view" data-tooltip="Table View"
+            aria-label="Open accessible table view" id="accessibility-toggle">
+      <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
+    </button>
+  </nav>
 
-    <div class="header-center" id="header-paper-info">
-      <!-- Populated by JS once graph loads -->
-    </div>
-
-    <div class="header-actions">
-      <button id="leaderboard-toggle" class="btn-icon" title="Impact Leaderboard"
-              aria-label="Toggle impact leaderboard">&#x26A1;</button>
-      <button id="genealogy-btn" class="btn-icon" title="Genealogy Story"
-              aria-label="Generate genealogy narrative">&#x1F4D6;</button>
-      <button id="accessibility-toggle" class="btn-icon" title="Accessible Table View"
-              aria-label="Switch to accessible table view">&#x267F;</button>
+  <!-- ═══════ HEADER BAR ═══════ -->
+  <header class="tool-header-v2">
+    <a href="/" class="brand-wordmark" style="text-decoration:none;color:inherit">Arivu</a>
+    <div class="header-right-v2">
+      <a href="/explore" class="nav-link">Explore</a>
+      {% if g.user %}
+        <a href="/account" class="user-avatar-btn" title="{{ g.user.display_name or g.user.email.split('@')[0] }}">
+          {{ (g.user.display_name or g.user.email.split('@')[0])[:1] | upper }}
+        </a>
+      {% else %}
+        <a href="/login" class="nav-link">Log in</a>
+      {% endif %}
     </div>
   </header>
 
-  <!-- GRAPH AREA -->
+  <!-- ═══════ PAPER INFO ROW ═══════ -->
+  <div class="paper-info-row">
+    <h1 class="paper-title-text" id="paper-title-text">Loading paper...</h1>
+    <p class="paper-author-text" id="paper-author-text"></p>
+    <!-- Hidden: backward-compat for any code referencing header-paper-info -->
+    <span id="header-paper-info" style="display:none"></span>
+  </div>
+
+  <!-- ═══════ GRAPH AREA ═══════ -->
   <main id="graph-container" role="main" aria-label="Citation ancestry graph">
+
+    <!-- View controls -->
+    <div class="graph-controls-top">
+      <div class="mode-label-group">
+        <span class="mode-label" id="mode-label">MODE: TREE LAYOUT</span>
+        <button class="window-icon-btn window-icon-graph" data-window="graph" title="Open in window" aria-label="Open graph in window">
+          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M3 9h6"/></svg>
+        </button>
+      </div>
+      <div class="view-controls-group">
+        <div class="view-switcher">
+          <button class="view-btn active" data-view="tree" title="Tree Layout">
+            <svg viewBox="0 0 24 24"><path d="M12 3v6"/><path d="M6 9v6"/><path d="M18 9v6"/><path d="M12 9l-6 0"/><path d="M12 9l6 0"/><circle cx="12" cy="3" r="1.5"/><circle cx="6" cy="15" r="1.5"/><circle cx="18" cy="15" r="1.5"/><circle cx="3" cy="21" r="1.5"/><circle cx="9" cy="21" r="1.5"/><circle cx="15" cy="21" r="1.5"/><circle cx="21" cy="21" r="1.5"/><path d="M6 15l-3 6"/><path d="M6 15l3 6"/><path d="M18 15l-3 6"/><path d="M18 15l3 6"/></svg>
+          </button>
+          <button class="view-btn" data-view="graph" title="Force Graph">
+            <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="8" cy="18" r="2"/><circle cx="17" cy="17" r="2"/><path d="M8 6l8 2"/><path d="M6 8l2 8"/><path d="M16 10l-6 6"/><path d="M10 18l7-1"/></svg>
+          </button>
+          <button class="view-btn" data-view="3d" title="3D View (Coming Soon)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M12 2l10 6v8l-10 6L2 16V8z"/><path d="M12 22V10"/><path d="M2 8l10 4 10-4"/></svg>
+          </button>
+        </div>
+        <button class="recenter-btn" id="recenter-btn" title="Recenter graph">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4"/><path d="M12 18v4"/><path d="M2 12h4"/><path d="M18 12h4"/></svg>
+        </button>
+      </div>
+    </div>
+
     <!-- Loading overlay -->
     <div id="loading-overlay">
       <div class="loading-inner">
@@ -54,14 +101,23 @@
     <!-- Tooltip -->
     <div id="graph-tooltip" role="tooltip" hidden></div>
 
-    <!-- Leaderboard sidebar -->
-    <aside id="leaderboard-sidebar" aria-label="Impact leaderboard" aria-hidden="true">
-      <h3>Impact Leaderboard</h3>
-      <p class="sidebar-sub">Papers ranked by how many others collapse without them</p>
-      <ol id="leaderboard-list"></ol>
-    </aside>
+    <!-- Old leaderboard sidebar (hidden in v2, kept for backward compat) -->
+    <aside id="leaderboard-sidebar" aria-hidden="true"></aside>
 
-    <!-- Prune pill (shows when nodes are selected) -->
+    <!-- Filter dropdown -->
+    <div class="graph-controls-bottom">
+      <select id="graph-filter" class="filter-select" aria-label="Filter graph nodes">
+        <option value="relevant">Most Relevant</option>
+        <option value="cited-desc">Most Cited</option>
+        <option value="cited-asc">Least Cited</option>
+        <option value="impact">Highest Impact</option>
+        <option value="bottlenecks">Bottlenecks Only</option>
+        <option value="decade" disabled>By Decade (coming soon)</option>
+        <option value="contradictions">Contradictions</option>
+      </select>
+    </div>
+
+    <!-- Prune pill -->
     <div id="prune-pill" class="hidden" role="status" aria-live="polite">
       <span id="prune-pill-count">0</span> papers selected
       <button id="prune-execute-btn">Simulate removal &#x2192;</button>
@@ -74,11 +130,11 @@
     </div>
   </main>
 
-  <!-- RIGHT PANEL -->
+  <!-- ═══════ RIGHT PANEL ═══════ -->
   <aside id="right-panel" aria-label="Graph analysis panel">
     <div class="right-panel-inner">
 
-      <!-- Paper info panel -->
+      <!-- Paper detail (hidden by default) -->
       <section id="paper-detail-panel" class="panel-section hidden">
         <h3 id="detail-title"></h3>
         <div id="detail-meta"></div>
@@ -86,13 +142,18 @@
       </section>
 
       <!-- DNA Profile -->
-      <section class="panel-section" id="dna-section">
-        <h3>Research DNA</h3>
+      <section class="panel-card" id="dna-section">
+        <div class="panel-card-header">
+          <h3>Research DNA</h3>
+          <button class="window-icon-btn" data-window="dna" title="Open in window" aria-label="Open Research DNA in window">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M3 9h6"/></svg>
+          </button>
+        </div>
         <p class="panel-sub">Semantic clusters in this paper's ancestry</p>
         <div class="dna-chart-wrapper">
           <canvas id="dna-donut-chart" aria-label="DNA profile donut chart"></canvas>
         </div>
-        <div id="dna-comparison" class="hidden" style="display:none">
+        <div id="dna-comparison" style="display:none">
           <div class="dna-compare-row">
             <div>
               <span id="dna-before-label" class="chart-label">Before</span>
@@ -104,17 +165,34 @@
             </div>
           </div>
         </div>
+        <div class="pagination-dots" data-section="dna">
+          <span class="dot active" data-index="0"></span>
+          <span class="dot" data-index="1"></span>
+          <span class="dot" data-index="2"></span>
+          <span class="dot" data-index="3"></span>
+        </div>
       </section>
 
       <!-- Diversity radar -->
-      <section class="panel-section" id="diversity-section">
-        <h3>Intellectual Diversity <span id="diversity-score-number" class="score-badge">&#x2014;</span></h3>
+      <section class="panel-card" id="diversity-section">
+        <div class="panel-card-header">
+          <h3>Intellectual Diversity <span id="diversity-score-number" class="score-badge">&#x2014;</span></h3>
+          <button class="window-icon-btn" data-window="diversity" title="Open in window" aria-label="Open Intellectual Diversity in window">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M3 9h6"/></svg>
+          </button>
+        </div>
         <canvas id="diversity-radar-chart" aria-label="Diversity radar chart"></canvas>
         <p id="diversity-context-note" class="panel-note"></p>
+        <div class="pagination-dots" data-section="diversity">
+          <span class="dot active" data-index="0"></span>
+          <span class="dot" data-index="1"></span>
+          <span class="dot" data-index="2"></span>
+          <span class="dot" data-index="3"></span>
+        </div>
       </section>
 
       <!-- Pruning stats (shown after pruning) -->
-      <section id="prune-stats-panel" class="panel-section hidden">
+      <section id="prune-stats-panel" class="panel-card hidden">
         <h3>Pruning Impact</h3>
         <div class="prune-stats-grid">
           <div class="stat-item">
@@ -135,44 +213,80 @@
       <!-- Export Panel -->
       <div id="export-panel-container"></div>
 
-      <!-- AI Guide -->
-      <section class="panel-section" id="chat-section">
-        <h3>Research Guide</h3>
-        <div id="chat-messages" role="log" aria-live="polite" aria-label="Chat history"></div>
-        <div class="chat-input-row">
-          <input type="text" id="chat-input" placeholder="Ask about this graph..."
-                 aria-label="Ask the AI research guide">
-          <button id="chat-send" aria-label="Send message">&#x2192;</button>
-        </div>
-      </section>
-
     </div>
   </aside>
 
-  <!-- BOTTOM BAR -->
-  <div id="bottom-bar" role="complementary" aria-label="Orphan ideas and timeline">
-    <div class="bottom-bar-tabs" role="tablist">
-      <button role="tab" id="tab-orphans" aria-selected="true" aria-controls="orphans-panel">
-        Orphan Ideas
-      </button>
-      <button role="tab" id="tab-coverage" aria-selected="false" aria-controls="coverage-panel">
-        Data Coverage
-      </button>
+  <!-- ═══════ BOTTOM BAR (collapsible) ═══════ -->
+  <div id="bottom-bar" class="collapsed" role="complementary" aria-label="Orphan ideas and data coverage">
+    <div class="bottom-bar-toggle" id="bottom-bar-toggle">
+      <span id="bottom-bar-summary">Orphan Ideas &middot; Data Coverage &middot; 0 papers</span>
+      <div class="bottom-bar-controls">
+        <button class="window-icon-btn" data-window="orphans-coverage" title="Open in window" aria-label="Open Orphan Ideas and Coverage in window">
+          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M3 9h6"/></svg>
+        </button>
+        <span class="bottom-chevron">&#x25BE;</span>
+      </div>
     </div>
 
-    <div role="tabpanel" id="orphans-panel" aria-labelledby="tab-orphans">
-      <div id="orphan-cards-container" class="orphan-cards-row"></div>
-    </div>
+    <div class="bottom-bar-content">
+      <div class="bottom-bar-tabs" role="tablist">
+        <button role="tab" id="tab-orphans" aria-selected="true" aria-controls="orphans-panel">
+          Orphan Ideas
+        </button>
+        <button role="tab" id="tab-coverage" aria-selected="false" aria-controls="coverage-panel">
+          Data Coverage
+        </button>
+      </div>
 
-    <div role="tabpanel" id="coverage-panel" aria-labelledby="tab-coverage" hidden>
-      <div id="coverage-details"></div>
+      <div role="tabpanel" id="orphans-panel" aria-labelledby="tab-orphans">
+        <div id="orphan-cards-container" class="orphan-cards-row"></div>
+      </div>
+
+      <div role="tabpanel" id="coverage-panel" aria-labelledby="tab-coverage" hidden>
+        <div id="coverage-details"></div>
+      </div>
     </div>
   </div>
 
-  <!-- Accessible table view (hidden by default) -->
-  <div id="table-view" hidden role="main" aria-label="Citation graph as accessible table">
+  <!-- ═══════ SLIDE-OUT PANELS ═══════ -->
+
+  <!-- Chat panel -->
+  <div class="slide-panel" id="panel-chat" aria-hidden="true">
+    <div class="slide-panel-header">
+      <h3>Research Guide</h3>
+      <button class="slide-panel-close" aria-label="Close panel">&#x2715;</button>
+    </div>
+    <div class="slide-panel-body" style="display:flex;flex-direction:column;height:calc(100% - 57px)">
+      <div id="chat-messages" role="log" aria-live="polite" aria-label="Chat history"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Ask about this graph..."
+               aria-label="Ask the AI research guide">
+        <button id="chat-send" aria-label="Send message">&#x2192;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaderboard panel -->
+  <div class="slide-panel" id="panel-leaderboard" aria-hidden="true">
+    <div class="slide-panel-header">
+      <h3>Impact Leaderboard</h3>
+      <button class="slide-panel-close" aria-label="Close panel">&#x2715;</button>
+    </div>
+    <div class="slide-panel-body">
+      <p class="sidebar-sub">Papers ranked by how many others collapse without them</p>
+      <ol id="leaderboard-list"></ol>
+    </div>
+  </div>
+
+  <!-- Panel backdrop -->
+  <div class="panel-backdrop" id="panel-backdrop"></div>
+
+  <!-- ═══════ EXISTING OVERLAY ELEMENTS ═══════ -->
+
+  <!-- Accessible table view -->
+  <div id="table-view" hidden role="region" aria-label="Citation graph as accessible table">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <h2 style="margin:0">Papers in this research lineage</h2>
+      <h2 style="margin:0;color:var(--text-primary)">Papers in this research lineage</h2>
       <button onclick="document.getElementById('table-view').hidden=true"
               style="background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--bg-elevated);
                      padding:6px 16px;border-radius:6px;cursor:pointer;font-size:0.85rem">
@@ -219,4 +333,18 @@
 <script src="{{ url_for('static', filename='js/loader.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/accessibility.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/export-panel.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/genealogy-story.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/sidebar.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/tree-layout.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/window-manager.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/researcher-sprites.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/researcher-character.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/deep-intelligence.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/momentum-tracker.js') }}?v=6" defer></script>
+<script src="{{ url_for('static', filename='js/intel-content-renderer.js') }}?v=1" defer></script>
+<script src="{{ url_for('static', filename='js/blindspots-battles.js') }}?v=2" defer></script>
+<script src="{{ url_for('static', filename='js/trust-evidence.js') }}?v=1" defer></script>
+<script src="{{ url_for('static', filename='js/pathfinder.js') }}?v=1" defer></script>
+<script src="{{ url_for('static', filename='js/window-manager-intel.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/ai-content.js') }}" defer></script>
 {% endblock %}
