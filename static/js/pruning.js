@@ -28,14 +28,12 @@ class PruningSystem {
       const { nodeId } = e.detail;
       if (this.state === 'pruned') { this.reset(); return; }
 
-      // Select node from either force graph or tree layout
-      const nodeEl = this._selectNodeEl(nodeId);
       if (this.pruneSet.has(nodeId)) {
         this.pruneSet.delete(nodeId);
-        if (nodeEl) nodeEl.classed('prune-selected', false);
+        this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`).classed('prune-selected', false);
       } else {
         this.pruneSet.add(nodeId);
-        if (nodeEl) nodeEl.classed('prune-selected', true);
+        this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`).classed('prune-selected', true);
       }
 
       this.state = this.pruneSet.size > 0 ? 'selecting' : 'idle';
@@ -91,17 +89,6 @@ class PruningSystem {
       if (window._rightPanel) window._rightPanel.renderPruningStats(result);
       if (window._dnaChart && result.dna_after) window._dnaChart.renderComparison(result.dna_after);
 
-      // Fire event for graph window pruning panel
-      window._lastPruneResult = result;
-      window.dispatchEvent(new CustomEvent('arivu:prune-result', { detail: result }));
-
-      // Apply prune visuals to tree layout (if it exists)
-      if (window._treeLayout?.applyPruneVisual) {
-        const collapsedIds = new Set((result.collapsed_nodes || []).map(n => n.paper_id || n.id || n));
-        const survivedIds = new Set((result.surviving_nodes || []).map(n => n.paper_id || n.id || n));
-        window._treeLayout.applyPruneVisual(collapsedIds, survivedIds);
-      }
-
     } catch (err) {
       console.error('Prune request failed:', err);
       this.state = 'idle';
@@ -111,16 +98,14 @@ class PruningSystem {
   async _animateCascade(result) {
     const delay = ms => new Promise(r => setTimeout(r, this._shouldAnimate() ? ms : 0));
 
-    // Step 1: mark pruned nodes (handles both circle for force and rect for tree)
+    // Step 1: mark pruned nodes
     for (const nodeId of result.pruned_ids) {
-      const nodeEl = this._selectNodeEl(nodeId);
-      if (nodeEl) {
-        this._selectShape(nodeEl)
-          .transition().duration(300)
-          .attr('fill', '#1a1a2e')
-          .attr('stroke', '#111')
-          .attr('stroke-width', 1);
-      }
+      this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`)
+        .select('circle')
+        .transition().duration(300)
+        .attr('fill', '#1a1a2e')
+        .attr('stroke', '#111')
+        .attr('stroke-width', 1);
     }
     await delay(200);
 
@@ -135,15 +120,14 @@ class PruningSystem {
     for (const level of Object.keys(byLevel).sort((a,b) => a-b)) {
       await delay(200);
       for (const nodeId of byLevel[level]) {
-        const nodeEl = this._selectNodeEl(nodeId);
-        if (nodeEl) {
-          this._selectShape(nodeEl)
-            .transition().duration(400)
-            .attr('fill', '#7f1d1d')
-            .attr('stroke', '#EF4444')
-            .style('opacity', 0.25);
-          nodeEl.transition().duration(400).style('opacity', 0.2);
-        }
+        this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`)
+          .select('circle')
+          .transition().duration(400)
+          .attr('fill', '#7f1d1d')
+          .attr('stroke', '#EF4444')
+          .style('opacity', 0.25);
+        this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`)
+          .transition().duration(400).style('opacity', 0.2);
 
         this.graph.edgeElements
           .filter(d => {
@@ -174,12 +158,10 @@ class PruningSystem {
           .transition().duration(400)
           .attr('stroke', '#22C55E').attr('stroke-opacity', 0.9).attr('stroke-width', 3);
       }
-      const survNodeEl = this._selectNodeEl(survivor.paper_id);
-      if (survNodeEl) {
-        this._selectShape(survNodeEl)
-          .transition().duration(300)
-          .attr('stroke', '#22C55E').attr('stroke-width', 3);
-      }
+      this.graph.nodeGroup.select(`g.node[data-id="${survivor.paper_id}"]`)
+        .select('circle')
+        .transition().duration(300)
+        .attr('stroke', '#22C55E').attr('stroke-width', 3);
     }
   }
 
@@ -188,7 +170,6 @@ class PruningSystem {
     this.pruneSet.clear();
     this.currentResult = null;
 
-    // Reset force-graph nodes
     this.graph.nodeGroup.selectAll('g.node')
       .classed('prune-selected', false)
       .transition().duration(500)
@@ -204,21 +185,6 @@ class PruningSystem {
       .attr('stroke', d => this.graph._edgeColor(d))
       .attr('stroke-opacity', 0.4)
       .attr('stroke-width', d => 0.5 + (d.similarity_score||0) * 3);
-
-    // Also reset tree nodes if tree layout exists
-    if (window._treeLayout?.resetPruneVisual) {
-      window._treeLayout.resetPruneVisual();
-    } else if (window._treeLayout && window._treeLayout.nodeGroup) {
-      window._treeLayout.nodeGroup.selectAll('g.tree-node')
-        .classed('prune-selected', false)
-        .transition().duration(500)
-        .style('opacity', 1)
-        .select('rect')
-        .attr('fill', d => d.depth === 0 ? '#374151' : '#9CA3AF')
-        .attr('stroke', d => d.depth === 0 ? '#111827' : '#6B7280')
-        .attr('stroke-width', d => d.depth === 0 ? 1.5 : 0.5)
-        .style('opacity', 1);
-    }
 
     // Only restore pill HTML if _showPrunedState() actually mutated it.
     // This prevents unnecessary DOM destruction and listener re-attachment
@@ -239,9 +205,6 @@ class PruningSystem {
 
     document.getElementById('prune-stats-panel')?.classList.add('hidden');
     if (window._dnaChart) window._dnaChart.resetComparison();
-
-    // Notify window manager that pruning was reset (hides pruning panel in graph window)
-    window.dispatchEvent(new CustomEvent('arivu:prune-reset'));
   }
 
   _updatePill() {
@@ -276,27 +239,5 @@ class PruningSystem {
   _shouldAnimate() {
     return !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
            !document.body.classList.contains('no-animations');
-  }
-
-  /** Select a node element from either force graph or tree layout */
-  _selectNodeEl(nodeId) {
-    // Try force graph first
-    let el = this.graph.nodeGroup.select(`g.node[data-id="${nodeId}"]`);
-    if (!el.empty()) return el;
-    // Try tree layout
-    if (window._treeLayout && window._treeLayout.nodeGroup) {
-      el = window._treeLayout.nodeGroup.select(`g.tree-node[data-id="${nodeId}"]`);
-      if (!el.empty()) return el;
-    }
-    return null;
-  }
-
-  /** Get the shape element (circle for force, rect for tree) inside a node group */
-  _selectShape(nodeGroup) {
-    const circle = nodeGroup.select('circle');
-    if (!circle.empty()) return circle;
-    const rect = nodeGroup.select('rect');
-    if (!rect.empty()) return rect;
-    return nodeGroup; // fallback
   }
 }

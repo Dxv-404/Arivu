@@ -79,10 +79,7 @@ class ArivuLLMClient:
 
     def generate_genealogy_story(self, graph_json: dict) -> dict:
         """
-        Generate a structured genealogy narrative for a paper's ancestry graph.
-
-        Uses mutation types, bottleneck data, and temporal eras to produce
-        a chapter-based narrative with mutation verbs (ADOPTED, GENERALIZED, etc.).
+        Generate a genealogy narrative for a paper's ancestry graph.
 
         Args:
             graph_json: full graph JSON from export_to_json()
@@ -98,109 +95,26 @@ class ArivuLLMClient:
         seed_title = metadata.get("seed_paper_title", "Unknown paper")
         total_nodes = metadata.get("total_nodes", 0)
 
-        nodes = graph_json.get("nodes", [])
-        edges = graph_json.get("edges", [])
-
-        # Extract bottleneck papers (top 5 by pruning_impact)
-        bottlenecks = sorted(
-            [n for n in nodes if (n.get("pruning_impact") or 0) > 0],
-            key=lambda n: n.get("pruning_impact", 0), reverse=True
-        )[:5]
-        bottleneck_summary = "\n".join([
-            f"- \"{n.get('title', '?')}\" ({n.get('year', '?')}) — "
-            f"{n.get('pruning_impact', 0)} papers depend on it [BOTTLENECK]"
-            for n in bottlenecks
-        ]) if bottlenecks else "No bottlenecks detected."
-
-        # Count mutation types
-        mutation_counts = {}
-        for e in edges:
-            mt = e.get("mutation_type", "unknown")
-            mutation_counts[mt] = mutation_counts.get(mt, 0) + 1
-        total_edges = len(edges) or 1
-        mutation_summary = "\n".join([
-            f"- {mt}: {count} edges ({round(count/total_edges*100)}%)"
-            for mt, count in sorted(mutation_counts.items(), key=lambda x: -x[1])[:6]
+        # Build compact summary for prompt
+        nodes = graph_json.get("nodes", [])[:20]
+        node_summary = "\n".join([
+            f"- {n.get('title', 'Unknown')} ({n.get('year', '?')})"
+            for n in nodes
         ])
-
-        # Group key papers by era
-        nodes_with_year = sorted(
-            [n for n in nodes if n.get("year")],
-            key=lambda n: n["year"]
-        )
-        oldest = nodes_with_year[0] if nodes_with_year else None
-        newest = nodes_with_year[-1] if nodes_with_year else None
-        min_year = oldest["year"] if oldest else "?"
-        max_year = newest["year"] if newest else "?"
-
-        # Top cited papers per era
-        era_papers = {}
-        for n in nodes_with_year[:50]:  # limit to keep prompt small
-            decade = (n["year"] // 10) * 10
-            era_key = f"{decade}s"
-            if era_key not in era_papers:
-                era_papers[era_key] = []
-            if len(era_papers[era_key]) < 3:
-                era_papers[era_key].append(
-                    f"\"{n.get('title', '?')}\" ({n.get('year', '?')}, "
-                    f"{n.get('citation_count', 0)} citations)"
-                )
-        era_summary = "\n".join([
-            f"{era}: {'; '.join(papers)}"
-            for era, papers in sorted(era_papers.items())
-        ])
-
-        # Find contradiction edges
-        contradictions = [e for e in edges if e.get("mutation_type") == "contradiction"]
-        contradiction_summary = ""
-        if contradictions:
-            for c in contradictions[:3]:
-                src_id = c.get("source") if isinstance(c.get("source"), str) else c.get("source", {}).get("id", "?")
-                tgt_id = c.get("target") if isinstance(c.get("target"), str) else c.get("target", {}).get("id", "?")
-                src_node = next((n for n in nodes if n.get("id") == src_id), {})
-                tgt_node = next((n for n in nodes if n.get("id") == tgt_id), {})
-                contradiction_summary += (
-                    f"- \"{src_node.get('title', '?')}\" CONTRADICTED BY "
-                    f"\"{tgt_node.get('title', '?')}\"\n"
-                )
 
         system_prompt = (
-            "You are a science historian writing a structured genealogy narrative "
-            "for researchers. Write in ERA CHAPTERS with uppercase headings.\n\n"
-            "RULES:\n"
-            "- Use era chapter headings in ALL CAPS with year ranges, e.g.:\n"
-            "  THE FOUNDATIONS (1990-2005)\n"
-            "  THE BREAKTHROUGH (2015-2016)\n"
-            "- Use mutation verbs in CAPS when describing how ideas flow between papers:\n"
-            "  ADOPTED (direct method reuse), GENERALIZED (extended scope),\n"
-            "  SPECIALIZED (narrowed focus), CONTRADICTED (challenged assumptions),\n"
-            "  EXTENDED (built upon), HYBRIDIZED (combined approaches), REVIVED (brought back)\n"
-            "- Reference paper titles in quotes with year\n"
-            "- Mention specific numbers (citation counts, descendant counts)\n"
-            "- For bottleneck papers, mention how many papers depend on them\n"
-            "- NO filler phrases. BANNED phrases: 'rich and complex', 'testament to',\n"
-            "  'it is worth noting', 'gain a deeper understanding', 'expected to further evolve',\n"
-            "  'new innovations and applications', 'continue to build upon', 'in the coming years',\n"
-            "  'this lineage demonstrates', 'the field is expected'\n"
-            "- Each era chapter: 2-4 sentences maximum\n"
-            "- Total: 3-5 era chapters\n"
-            "- End with a 1-sentence SPECIFIC statement about an unresolved question or\n"
-            "  unexplored direction in this lineage. NOT a generic 'the field will evolve' sentence.\n"
-            "  Example: 'The absence of neuroscience methods in this lineage leaves open the\n"
-            "  question of whether biologically-inspired architectures could outperform ResNet.'\n"
-            "- Each chapter heading MUST be on its own line, separated by blank lines\n"
-            "- Separate chapters with TWO blank lines\n"
+            "You are a science historian writing for researchers. "
+            "Write a compelling 2-3 paragraph narrative about the intellectual "
+            "ancestry of an academic paper. Focus on the key ideas that flowed "
+            "between papers, how concepts evolved, and what makes this lineage "
+            "significant. Be specific and cite paper titles."
         )
         user_prompt = (
-            f"Paper: \"{seed_title}\"\n"
-            f"Total ancestry: {total_nodes} papers, spanning {min_year} to {max_year}\n\n"
-            f"BOTTLENECK PAPERS (structurally critical):\n{bottleneck_summary}\n\n"
-            f"MUTATION TYPES (how ideas flow):\n{mutation_summary}\n\n"
-            f"KEY PAPERS BY ERA:\n{era_summary}\n\n"
+            f"Paper: {seed_title}\n"
+            f"Total ancestry papers: {total_nodes}\n"
+            f"Key papers in ancestry:\n{node_summary}\n\n"
+            f"Write the genealogy story."
         )
-        if contradiction_summary:
-            user_prompt += f"CONTRADICTIONS IN THE LINEAGE:\n{contradiction_summary}\n\n"
-        user_prompt += "Write the genealogy story in era chapters with mutation verbs."
 
         key = _cache_key(model, system_prompt, user_prompt)
 
@@ -221,8 +135,8 @@ class ArivuLLMClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.6,
-                max_tokens=1500,
+                temperature=0.7,
+                max_tokens=1000,
             )
             narrative = response.choices[0].message.content.strip()
 

@@ -410,12 +410,9 @@ class AncestryGraph:
             pruning_impacts = compute_all_pruning_impacts(self.graph, self.seed_paper_id)
             self._pruning_impacts = pruning_impacts
             impact_lookup = {pid: data.get("collapse_count", 0) for pid, data in pruning_impacts.items()}
-            # Bottleneck threshold: top 20% of NON-ZERO impacts, not all nodes.
-            # In sparse graphs (e.g. 601 nodes, only 21 with impact > 0), using
-            # all nodes gives threshold=0 which marks nothing as bottleneck.
-            nonzero_vals = sorted([v for v in impact_lookup.values() if v > 0], reverse=True)
-            if nonzero_vals:
-                threshold = nonzero_vals[min(len(nonzero_vals) - 1, max(0, len(nonzero_vals) // 5))]
+            if impact_lookup:
+                sorted_vals = sorted(impact_lookup.values(), reverse=True)
+                threshold = sorted_vals[max(0, len(sorted_vals) // 5)] if sorted_vals else 0
             else:
                 threshold = 0
             for node in graph_json.get("nodes", []):

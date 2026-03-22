@@ -49,19 +49,17 @@ document.addEventListener('DOMContentLoaded', () => {
     modal.open ? modal.close() : modal.showModal();
   }
 
-  // Tab panel switching in bottom bar — skip on v2 layout (sidebar.js owns tabs)
-  if (!document.querySelector('.tool-layout-v2')) {
-    document.querySelectorAll('[role="tab"]').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const panelId = tab.getAttribute('aria-controls');
-        document.querySelectorAll('[role="tab"]').forEach(t => t.setAttribute('aria-selected', 'false'));
-        document.querySelectorAll('[role="tabpanel"]').forEach(p => { p.hidden = true; });
-        tab.setAttribute('aria-selected', 'true');
-        const panel = document.getElementById(panelId);
-        if (panel) panel.hidden = false;
-      });
+  // Tab panel switching in bottom bar
+  document.querySelectorAll('[role="tab"]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const panelId = tab.getAttribute('aria-controls');
+      document.querySelectorAll('[role="tab"]').forEach(t => t.setAttribute('aria-selected', 'false'));
+      document.querySelectorAll('[role="tabpanel"]').forEach(p => { p.hidden = true; });
+      tab.setAttribute('aria-selected', 'true');
+      const panel = document.getElementById(panelId);
+      if (panel) panel.hidden = false;
     });
-  }
+  });
 
   // Animation toggle
   const animToggle = document.getElementById('disable-animations-toggle');

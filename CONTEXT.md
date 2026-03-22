@@ -71,34 +71,36 @@ Phase 8 — Final Intelligence Layer, Trust Features, Live Mode & v1.0 (COMPLETE
 - Phase 9: WebSocket live mode, async job queue, full-graph live monitoring, mobile app, real S2 author ID resolution for profiles
 
 ## Last Session Summary
-Post-v1.0 production hardening session (2026-03-17):
+Phase 8 implementation completed in full:
 
-**Bug Fixes (6 total):**
-1. Pruning reset: `_pillMutated` flag prevents unnecessary DOM destruction on reset
-2. DNA donut: fixed innerHTML override breaking Chart.js canvas
-3. Node URLs: `window.open()` corrected for external paper links
-4. Coverage stat: `Number.isFinite()` guard for NaN/Infinity pruning_impact
-5. Impact table: `Number.isFinite()` guard for pruning_impact display
-6. **CRITICAL — pruning_impact always 0:** R2 cache was written BEFORE `compute_all_pruning_impacts()` in graph_engine.py. Moved R2 write to AFTER pruning computation. Added leaderboard-based enrichment for old cached graphs in app.py.
+**§0-§3:** Backports and 14 intelligence modules created:
+- cross_domain_spark, error_propagation, reading_between_lines, intellectual_debt
+- challenge_generator, idea_credit, researcher_profiles, literature_review_engine
+- field_entry_kit, research_risk_analyzer, science_journalism, live_mode
+- interdisciplinary_translation, graph_memory
+- CitationIntentClassifier added to nlp_pipeline.py
 
-**Build Time Optimization:**
-- `NLP_SIMILARITY_THRESHOLD` raised from 0.25 → 0.35 (edges 0.25–0.35 auto-classified as incidental — saves ~30% Groq calls)
-- `NLP_BATCH_SIZE` raised from 5 → 10 (cuts Groq call count by ~2×)
-- Dynamic `max_tokens = min(200 + len(batch) * 100, 2000)` prevents JSON truncation on larger batches
-- ADR-021 added documenting spec deviation
+**§5:** 28 Phase 8 routes added to app.py, flag-edge route upgraded with auto-downgrade
 
-**Verification (Stochastic Parrots graph — 601 nodes):**
-- 20 non-zero pruning impacts confirmed via SSE stream
-- 5 bottleneck nodes with gold/orange strokes visible in browser
-- Seed paper shows `600▸` impact badge
-- 73% abstract coverage, leaderboard populated
-- Health check: database OK, NLP worker OK, R2 storage OK
+**§6:** 19 rate limiter entries added
 
-**Commits:**
-- `4717979` — [fix] Fix pruning_impact always 0 in cached graphs
-- `b73899b` — [perf] Optimize build time: NLP_BATCH_SIZE 5→15, NLP_SIMILARITY_THRESHOLD 0.25→0.35
-- `e1256eb` — [fix] Address pessimistic debugger findings on build time optimization
-- `cde4381` — [fix] Active oversight fixes: remove [:50] slice in all_zero check, add ADR-021
+**§7-§10:** 6 JS files, ~100 CSS lines, 2 templates (researcher.html, journalism.html)
+
+**§11:** 3 scripts replaced (precompute_gallery.py, ground_truth_eval.py, benchmark_nlp.py)
+
+**§12:** Persona framing (`_get_persona_framing()`) wired into chat_guide.py
+
+**§13:** README.md replaced with v1.0 content
+
+**§14:** tests/test_phase8.py — 34 tests, 16 test classes, all passing
+
+**§15:** Self-directed audit — no banned patterns found (no @require_tier usage, no 'retractions' table refs, no LLMClient() direct instantiation in Phase 8 modules, no pymupdf/sqlite3 imports)
+
+**§16:** Phase 8 migration run against Neon — 7 tables verified
+
+**§17:** Security audit passed — parameterized SQL, CSP header present, no f-string SQL injection
+
+**Tests:** 253 total (34 Phase 8), 0 failures across all phases
 
 ## Post-v1.0 Audit Summary
 Post-implementation audit identified and fixed 7 issues:

@@ -62,33 +62,23 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
     Returns:
         PruningResult
     """
-    # First: compute BASELINE reachability from seed BEFORE pruning.
-    # Some nodes may be unreachable from seed even in the original graph
-    # (e.g., papers that cite the seed but aren't referenced by it).
-    # These "always-unreachable" nodes must be excluded from collapse counts
-    # to avoid inflating the impact of every prune operation.
-    baseline_reachable = set()
-    if graph_nx.has_node(seed_id):
-        queue = deque([seed_id])
-        while queue:
-            node = queue.popleft()
-            if node in baseline_reachable:
-                continue
-            baseline_reachable.add(node)
-            for successor in graph_nx.successors(node):
-                queue.append(successor)
-
     working_graph = graph_nx.copy()
 
     for pid in pruned_ids:
         if working_graph.has_node(pid):
             working_graph.remove_node(pid)
 
-    # BFS from seed in the working graph (after pruning)
+    # BFS ONLY from the seed paper — NOT from all roots.
+    # In Arivu's DAG: edges go FROM citing paper TO cited paper.
+    # The seed paper is the entry point (in_degree == 0 in the original graph).
+    # If the seed itself was pruned, nothing is reachable → everything collapses.
+    all_nodes = set(graph_nx.nodes()) - set(pruned_ids)
+
     if seed_id in set(pruned_ids):
-        # Seed was pruned — everything that was reachable collapses
+        # Seed was pruned — the entire remaining graph collapses
         reachable = set()
     elif working_graph.has_node(seed_id):
+        # BFS from seed only — nodes reachable from seed survive
         reachable = set()
         queue = deque([seed_id])
         while queue:
@@ -99,11 +89,10 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
             for successor in working_graph.successors(node):
                 queue.append(successor)
     else:
+        # Seed not in graph at all (shouldn't happen) — nothing reachable
         reachable = set()
 
-    # Collapsed = nodes that WERE reachable before pruning but are NOT reachable after.
-    # Exclude: pruned nodes themselves and nodes that were never reachable (baseline).
-    collapsed_nodes_set = (baseline_reachable - reachable) - set(pruned_ids)
+    collapsed_nodes_set = all_nodes - reachable
     surviving_nodes_set = reachable
 
     # Group collapsed nodes by BFS distance from any pruned node
@@ -148,9 +137,7 @@ def compute_pruning_result(graph_nx: nx.DiGraph, pruned_ids: list,
     dna_before = _simple_dna(graph_nx, all_papers, set())
     dna_after = _simple_dna(graph_nx, all_papers, set(pruned_ids))
 
-    # Use baseline reachable count as the denominator — not total graph nodes.
-    # This excludes nodes that were never reachable from seed.
-    total = len(baseline_reachable) if baseline_reachable else len(graph_nx.nodes())
+    total = len(graph_nx.nodes())
     collapsed_count = len(collapsed_nodes_set)
 
     return PruningResult(
@@ -180,55 +167,39 @@ def compute_all_pruning_impacts(graph_nx: nx.DiGraph, seed_id: str = None) -> di
                  falls back to the seed being the node with in_degree == 0.
     """
     impacts = {}
+    total = len(graph_nx.nodes())
 
     # Determine the seed if not explicitly provided
     if seed_id is None:
+        # Fallback: find the node with in_degree == 0 (should be the seed)
         roots = [n for n in graph_nx.nodes() if graph_nx.in_degree(n) == 0]
         seed_id = roots[0] if roots else None
 
     if seed_id is None:
+        # No seed found — return zero impacts
         return {node: {"collapse_count": 0, "impact_pct": 0.0} for node in graph_nx.nodes()}
 
-    # Compute baseline reachability from seed BEFORE any removals.
-    # Nodes unreachable from seed in the original graph must be excluded
-    # from collapse counts (they would inflate every node's impact).
-    baseline_reachable = set()
-    queue = deque([seed_id])
-    while queue:
-        n = queue.popleft()
-        if n in baseline_reachable:
-            continue
-        baseline_reachable.add(n)
-        for s in graph_nx.successors(n):
-            queue.append(s)
-
-    total = len(baseline_reachable)
-
     for node in graph_nx.nodes():
-        if node not in baseline_reachable:
-            # This node is unreachable from seed — removing it collapses nothing
-            collapsed_count = 0
-        elif node == seed_id:
-            # Removing the seed collapses everything reachable
+        if node == seed_id:
+            # Removing the seed collapses everything
             collapsed_count = total - 1
         else:
             working = graph_nx.copy()
             working.remove_node(node)
 
-            # BFS only from seed
+            # BFS only from seed — not from all roots
             reachable = set()
             if working.has_node(seed_id):
-                q = deque([seed_id])
-                while q:
-                    n = q.popleft()
+                queue = deque([seed_id])
+                while queue:
+                    n = queue.popleft()
                     if n in reachable:
                         continue
                     reachable.add(n)
                     for s in working.successors(n):
-                        q.append(s)
+                        queue.append(s)
 
-            # Collapsed = baseline reachable nodes that are no longer reachable (minus the removed node)
-            collapsed_count = len((baseline_reachable - reachable) - {node})
+            collapsed_count = len((set(graph_nx.nodes()) - {node}) - reachable)
 
         impacts[node] = {
             "collapse_count": collapsed_count,

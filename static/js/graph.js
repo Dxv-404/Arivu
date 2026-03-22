@@ -307,7 +307,6 @@ class ArivuGraph {
 
   _defineArrowMarkers() {
     const defs = this.svg.append('defs');
-    this._defs = defs;
     const mutationTypes = ['adoption','generalization','specialization','hybridization',
                            'contradiction','revival','incidental','unknown'];
     const colors = {
@@ -328,9 +327,7 @@ class ArivuGraph {
         .attr('d', 'M0,-5L10,0L0,5')
         .attr('fill', colors[type] || '#475569');
     }
-
   }
-
 
   _handleZoomLevelChange(k) {
     if (k < 0.4 && this._semanticZoom && this.visibleNodeIds.size > 50) {
