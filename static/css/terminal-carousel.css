@@ -1,0 +1,676 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARIVU TERMINAL SESSION CAROUSEL — 3D Rolodex
+   Pure black/white + gold accent. CSS perspective-based 3D card rotation.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Overlay Backdrop ─────────────────────────────────────────────────── */
+
+.carousel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  z-index: 9500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.carousel-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+.carousel-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.carousel-title {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #ffffff;
+  margin: 0;
+}
+
+.carousel-subtitle {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #555;
+  margin-top: 6px;
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+
+.carousel-tabs {
+  display: flex;
+  gap: 0;
+  justify-content: center;
+}
+
+.carousel-tab {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #555;
+  background: none;
+  border: 1px solid #333;
+  border-bottom: none;
+  padding: 10px 28px 8px;
+  cursor: pointer;
+  transition: all 150ms;
+  position: relative;
+}
+
+.carousel-tab:first-child {
+  border-radius: 6px 0 0 0;
+  border-right: none;
+}
+
+.carousel-tab:last-child {
+  border-radius: 0 6px 0 0;
+}
+
+.carousel-tab--active {
+  color: #ffffff;
+  border-color: #555;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.carousel-tab--active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #D4A843;
+}
+
+.carousel-tab:hover:not(.carousel-tab--active) {
+  color: #999;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.carousel-tab-count {
+  font-size: 12px;
+  color: #444;
+  margin-left: 6px;
+}
+
+.carousel-tab--active .carousel-tab-count {
+  color: #D4A843;
+}
+
+.carousel-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  background: none;
+  border: 1px solid #333;
+  color: #999;
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 150ms;
+}
+
+.carousel-close:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+/* ── 3D Carousel Container ────────────────────────────────────────────── */
+
+.carousel-scene {
+  width: 100%;
+  max-width: 1000px;
+  height: 560px;
+  perspective: 1200px;
+  perspective-origin: 50% 45%;
+  position: relative;
+}
+
+.carousel-track {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+}
+
+/* ── Navigation Arrows ────────────────────────────────────────────────── */
+
+.carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 1px solid #333;
+  color: #999;
+  font-size: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: all 150ms;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+}
+
+.carousel-nav:hover {
+  color: #fff;
+  border-color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.carousel-nav--left { left: -60px; }
+.carousel-nav--right { right: -60px; }
+
+/* ── Cards ────────────────────────────────────────────────────────────── */
+
+.carousel-card {
+  position: absolute;
+  width: 320px;
+  height: 500px;
+  left: 50%;
+  top: 50%;
+  margin-left: -160px;
+  margin-top: -250px;
+  background: #111111;
+  border: 1px solid #333;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  will-change: transform, opacity;
+  image-rendering: crisp-edges;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Position classes — 3D rotation around Y axis */
+/* Active card: NO transform at all — pixel-perfect text rendering.
+   Stands out via white border + full opacity + z-index + glow. */
+.carousel-card.pos-0 {
+  transform: none;
+  border-color: #ffffff;
+  border-width: 2px;
+  box-shadow: 0 0 60px rgba(255, 255, 255, 0.08);
+  z-index: 100;
+  cursor: default;
+}
+
+/* Side cards: translateZ NEGATIVE (push BEHIND the active card)
+   rotateY creates the angled fan effect */
+.carousel-card.pos-1 {
+  transform: rotateY(35deg) translateZ(-80px) translateX(200px);
+  opacity: 0.55;
+  z-index: 5;
+}
+
+.carousel-card.pos--1 {
+  transform: rotateY(-35deg) translateZ(-80px) translateX(-200px);
+  opacity: 0.55;
+  z-index: 5;
+}
+
+.carousel-card.pos-2 {
+  transform: rotateY(60deg) translateZ(-160px) translateX(350px);
+  opacity: 0.3;
+  z-index: 2;
+}
+
+.carousel-card.pos--2 {
+  transform: rotateY(-60deg) translateZ(-160px) translateX(-350px);
+  opacity: 0.3;
+  z-index: 2;
+}
+
+.carousel-card.pos-hidden {
+  transform: rotateY(85deg) translateZ(-200px) translateX(450px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Card Internal Layout ─────────────────────────────────────────────── */
+
+.card-header {
+  padding: 16px 16px 10px;
+  border-bottom: 1px solid #222;
+}
+
+.card-name {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 400;
+  color: #ffffff;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-date {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 14px;
+  color: #555;
+  margin-top: 4px;
+}
+
+.card-stats {
+  display: flex;
+  gap: 2px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #222;
+}
+
+.card-stat {
+  flex: 1;
+  text-align: center;
+}
+
+.card-stat-val {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 20px;
+  font-weight: 400;
+  color: #ffffff;
+}
+
+.card-stat-label {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Card Preview (mini terminal) ─────────────────────────────────────── */
+
+.card-preview {
+  flex: 1;
+  padding: 10px 12px;
+  overflow: hidden;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.card-preview-cmd {
+  color: #cccccc;
+}
+
+.card-preview-out {
+  color: #666666;
+}
+
+/* ── Card Actions (only on active card) ───────────────────────────────── */
+
+.card-actions {
+  padding: 10px 16px 14px;
+  border-top: 1px solid #222;
+  display: none;
+}
+
+.pos-0 .card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.card-btn {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 5px;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 400;
+  text-align: center;
+  cursor: pointer;
+  transition: all 150ms;
+  border: 1px solid;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.card-btn--open {
+  background: #D4A843;
+  color: #000;
+  border-color: #D4A843;
+}
+
+.card-btn--open:hover {
+  background: #e5bc5a;
+}
+
+.card-btn--replay {
+  background: transparent;
+  color: #999;
+  border-color: #333;
+}
+
+.card-btn--replay:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+.card-btn--delete {
+  background: transparent;
+  color: #555;
+  border-color: #333;
+}
+
+.card-btn--delete:hover {
+  color: #ff4444;
+  border-color: #ff4444;
+}
+
+/* ── New Session Card ─────────────────────────────────────────────────── */
+
+.carousel-card.card-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  border-color: #333;
+}
+
+.card-new-inner {
+  text-align: center;
+}
+
+.card-new-icon {
+  font-size: 32px;
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.card-new-text {
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #555;
+}
+
+.pos-0 .card-new-icon { color: #999; }
+.pos-0 .card-new-text { color: #999; }
+
+/* ── Dot Indicators ───────────────────────────────────────────────────── */
+
+.carousel-dots {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+  align-items: center;
+  justify-content: center;
+}
+
+.carousel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #333;
+  transition: all 0.3s ease;
+}
+
+.carousel-dot.active {
+  width: 8px;
+  height: 8px;
+  background: #D4A843;
+}
+
+/* ── Keyboard hint ────────────────────────────────────────────────────── */
+
+.carousel-hint {
+  margin-top: 16px;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #333;
+  letter-spacing: 0.08em;
+}
+
+/* ── STATE 3: Expanded Detail View ────────────────────────────────────── */
+
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 9600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.detail-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.detail-panel {
+  width: 680px;
+  max-height: 85vh;
+  background: #111;
+  border: 2px solid #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  animation: detailIn 0.3s ease;
+}
+
+@keyframes detailIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Detail header */
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #222;
+}
+
+.detail-name {
+  font-size: 22px;
+  color: #fff;
+  font-weight: 400;
+}
+
+.detail-close {
+  background: none;
+  border: 1px solid #333;
+  color: #999;
+  font-size: 16px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 150ms;
+}
+
+.detail-close:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+/* Detail meta */
+.detail-meta {
+  padding: 10px 20px;
+  font-size: 14px;
+  color: #555;
+  border-bottom: 1px solid #222;
+}
+
+.detail-meta-active {
+  color: #D4A843;
+  font-weight: 400;
+}
+
+/* Detail stats row */
+.detail-stats {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #222;
+}
+
+.detail-stat {
+  flex: 1;
+  text-align: center;
+  padding: 14px 0;
+  border-right: 1px solid #222;
+}
+
+.detail-stat:last-child {
+  border-right: none;
+}
+
+.detail-stat-val {
+  font-size: 28px;
+  color: #fff;
+}
+
+.detail-stat-val--gold { color: #D4A843; }
+.detail-stat-val--green { color: #22c55e; }
+.detail-stat-val--blue { color: #4a9eed; }
+.detail-stat-val--red { color: #ef4444; }
+
+.detail-stat-label {
+  font-size: 12px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 2px;
+}
+
+/* Detail preview (scrollable terminal output) */
+.detail-preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #ccc;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+.detail-preview::-webkit-scrollbar { width: 5px; }
+.detail-preview::-webkit-scrollbar-track { background: transparent; }
+.detail-preview::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+.detail-preview-label {
+  font-size: 12px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+
+.detail-cmd {
+  color: #aaa;
+}
+
+.detail-cmd-keyword {
+  color: #D4A843;
+}
+
+.detail-out {
+  color: #555;
+}
+
+.detail-out-ok {
+  color: #22c55e;
+}
+
+.detail-out-err {
+  color: #ef4444;
+}
+
+.detail-more {
+  color: #333;
+  font-style: italic;
+  margin-top: 4px;
+}
+
+/* Detail action buttons */
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid #222;
+}
+
+.detail-btn {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 6px;
+  font-family: 'VT323', 'JetBrains Mono', monospace;
+  font-size: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 150ms;
+  border: 1px solid;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.detail-btn--open {
+  background: #D4A843;
+  color: #000;
+  border-color: #D4A843;
+}
+
+.detail-btn--open:hover { background: #e5bc5a; }
+
+.detail-btn--replay {
+  background: transparent;
+  color: #999;
+  border-color: #333;
+}
+
+.detail-btn--replay:hover { color: #fff; border-color: #fff; }
+
+.detail-btn--export {
+  background: transparent;
+  color: #555;
+  border-color: #222;
+}
+
+.detail-btn--export:hover { color: #999; border-color: #555; }
+
+.detail-btn--delete {
+  background: transparent;
+  color: #444;
+  border-color: #222;
+}
+
+.detail-btn--delete:hover { color: #ef4444; border-color: #ef4444; }
