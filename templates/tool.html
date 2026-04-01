@@ -3,7 +3,18 @@
 {% block title %}Arivu — Research Ancestry{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/tool-redesign.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tool-redesign.css') }}?v=25">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/athena-chat.css') }}?v=25">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/arivu-terminal.css') }}?v=2">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/terminal-carousel.css') }}?v=9">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/athena-blocks.css') }}?v=25">
+<!-- Array font from Fontshare for annotations -->
+<link href="https://api.fontshare.com/v2/css?f[]=array@400,700&display=swap" rel="stylesheet">
+<!-- VT323 dot matrix font for terminal session carousel -->
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<!-- KaTeX for math equation rendering -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
 {% endblock %}
 
 {% block body %}
@@ -27,13 +38,22 @@
             aria-label="Open accessible table view" id="accessibility-toggle">
       <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
     </button>
+    <button class="sidebar-btn" data-tooltip="Terminal Sessions"
+            aria-label="Open terminal session carousel" id="terminal-history-btn"
+            onclick="if(window.terminalCarousel)window.terminalCarousel.open()">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 8l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="16" x2="18" y2="16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
   </nav>
 
   <!-- ═══════ HEADER BAR ═══════ -->
   <header class="tool-header-v2">
     <a href="/" class="brand-wordmark" style="text-decoration:none;color:inherit">Arivu</a>
     <div class="header-right-v2">
-      <!-- Gallery removed -->
+      <!-- Athena toggle button (Feature #007) -->
+      <button id="athena-toggle" class="athena-toggle-btn" aria-label="Toggle Athena chat">
+        <span class="athena-dot">●</span>
+        <span class="athena-label">ATHENA</span>
+      </button>
       {% if g.user %}
         <a href="/account" class="user-avatar-btn" title="{{ g.user.display_name or g.user.email.split('@')[0] }}">
           {{ (g.user.display_name or g.user.email.split('@')[0])[:1] | upper }}
@@ -315,6 +335,28 @@
     <button id="genealogy-close" autofocus>Close</button>
   </dialog>
 
+  <!-- ═══════ ATHENA CHAT PANEL (Feature #007) ═══════ -->
+  <div id="athena-panel" class="athena-panel-container" role="complementary"
+       aria-label="Athena Research Chat" style="display: none;">
+    <div class="athena-header">
+      <span class="athena-header-dot">●</span>
+      <span class="athena-header-title">ATHENA</span>
+      <div class="athena-header-controls">
+        <button class="athena-newchat-btn" aria-label="New conversation" title="New chat">+</button>
+        <button class="athena-history-btn" aria-label="Conversation history" title="History">&#9776;</button>
+        <button class="athena-mode-btn" aria-label="Change layout mode" title="Layout mode">&#8801;</button>
+      </div>
+    </div>
+    <div class="athena-messages" role="log" aria-live="polite">
+      <!-- Messages rendered here by AthenaEngine -->
+    </div>
+    <button class="athena-scroll-bottom" aria-label="Scroll to latest message">Scroll to bottom</button>
+    <div class="athena-overlay"></div>
+    <div class="athena-input-area">
+      <!-- Rich input rendered here by AthenaInput (Feature #050) -->
+    </div>
+  </div>
+
 </div>
 {% endblock %}
 
@@ -327,24 +369,35 @@
 </script>
 <script src="{{ url_for('static', filename='js/api.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/semantic-zoom.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/graph.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/pruning.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/graph.js') }}?v=28" defer></script>
+<script src="{{ url_for('static', filename='js/pruning.js') }}?v=25" defer></script>
 <script src="{{ url_for('static', filename='js/panels.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/loader.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/accessibility.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/export-panel.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/genealogy-story.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/sidebar.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/tree-layout.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/tree-layout.js') }}?v=27" defer></script>
 <script src="{{ url_for('static', filename='js/window-manager.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/researcher-sprites.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/researcher-character.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/deep-intelligence.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/momentum-tracker.js') }}?v=6" defer></script>
-<script src="{{ url_for('static', filename='js/intel-content-renderer.js') }}?v=1" defer></script>
-<script src="{{ url_for('static', filename='js/blindspots-battles.js') }}?v=2" defer></script>
-<script src="{{ url_for('static', filename='js/trust-evidence.js') }}?v=1" defer></script>
-<script src="{{ url_for('static', filename='js/pathfinder.js') }}?v=1" defer></script>
+<script src="{{ url_for('static', filename='js/momentum-tracker.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/intel-content-renderer.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/blindspots-battles.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/trust-evidence.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/pathfinder.js') }}?v=25" defer></script>
 <script src="{{ url_for('static', filename='js/window-manager-intel.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/ai-content.js') }}" defer></script>
+<!-- Athena Chat System (Phase A) -->
+<script src="{{ url_for('static', filename='js/athena-layout.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/athena-input.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/athena-memory.js') }}?v=25" defer></script>
+<script src="{{ url_for('static', filename='js/athena-blocks.js') }}?v=27" defer></script>
+<script src="{{ url_for('static', filename='js/athena-engine.js') }}?v=27" defer></script>
+<script src="{{ url_for('static', filename='js/athena-graph-commands.js') }}?v=25" defer></script>
+<!-- Arivu Terminal (Phase C #012) -->
+<script src="{{ url_for('static', filename='js/arivu-terminal-parser.js') }}?v=4" defer></script>
+<script src="{{ url_for('static', filename='js/arivu-terminal.js') }}?v=8" defer></script>
+<script src="{{ url_for('static', filename='js/terminal-carousel.js') }}?v=4" defer></script>
 {% endblock %}
