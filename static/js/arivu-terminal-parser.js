@@ -115,9 +115,19 @@ class ArivuTerminalParser {
       }
       case 'script': return this._parseScript(rest, raw);
       case 'run': {
-        const scriptName = rest.join(' ').replace(/^["']|["']$/g, '');
-        if (!scriptName) return { command: null, args: {}, raw, error: 'Usage: run "<script-name>"' };
-        return { command: 'script_run', args: { name: scriptName }, error: null, raw };
+        // Separate script name from flags (--verbose, --dry, etc.)
+        // Script name is everything before the first --flag token
+        let nameTokens = [];
+        let flags = [];
+        for (const t of rest) {
+          if (t.startsWith('--')) { flags.push(t); }
+          else if (flags.length === 0) { nameTokens.push(t); }
+          else { flags.push(t); } // flag value like --top 5
+        }
+        const scriptName = nameTokens.join(' ').replace(/^["']|["']$/g, '');
+        if (!scriptName) return { command: null, args: {}, raw, error: 'Usage: run "<script-name>" [--verbose] [--dry] [--top N]' };
+        // Phase 2: flags will be parsed and applied. For now, store raw.
+        return { command: 'script_run', args: { name: scriptName, flags }, error: null, raw };
       }
       case 'scripts': return { command: 'script_list', args: {}, error: null, raw };
       case 'delete': {
@@ -182,9 +192,17 @@ class ArivuTerminalParser {
         return { command: 'script_copy', args: { name: srcName, newName }, error: null, raw };
       }
       case 'run': {
-        const name = rest.join(' ').replace(/^["']|["']$/g, '');
-        if (!name) return { command: null, args: {}, raw, error: 'Usage: script run "<name>"' };
-        return { command: 'script_run', args: { name }, error: null, raw };
+        // Separate script name from flags (--verbose, --dry, etc.)
+        let nameTokens = [];
+        let flags = [];
+        for (const t of rest) {
+          if (t.startsWith('--')) { flags.push(t); }
+          else if (flags.length === 0) { nameTokens.push(t); }
+          else { flags.push(t); }
+        }
+        const name = nameTokens.join(' ').replace(/^["']|["']$/g, '');
+        if (!name) return { command: null, args: {}, raw, error: 'Usage: script run "<name>" [--verbose] [--dry] [--top N]' };
+        return { command: 'script_run', args: { name, flags }, error: null, raw };
       }
       case 'export': {
         const name = rest.join(' ').replace(/^["']|["']$/g, '');

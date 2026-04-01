@@ -1,0 +1,318 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ARIVU TERMINAL — Research Intelligence Shell
+   Dark theme with syntax highlighting, draggable/resizable window
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --term-bg: #0D1117;
+  --term-surface: #161B22;
+  --term-border: #30363D;
+  --term-text: #E6EDF3;
+  --term-prompt: #22C55E;
+  --term-cmd: #D4A843;
+  --term-paper: #3B82F6;
+  --term-string: #F59E0B;
+  --term-data: #06B6D4;
+  --term-error: #EF4444;
+  --term-warning: #F59E0B;
+  --term-success: #22C55E;
+  --term-comment: #64748B;
+  --term-cursor: #D4A843;
+  --term-selection: #264F78;
+  --term-scrollbar: #30363D;
+}
+
+/* ── Terminal Window ──────────────────────────────────────────────────── */
+
+.arivu-terminal-window {
+  position: fixed;
+  bottom: 80px;
+  left: 20px;
+  width: 560px;
+  height: 380px;
+  min-width: 380px;
+  min-height: 220px;
+  background: var(--term-bg);
+  border: 1px solid var(--term-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9000;
+  resize: both;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  animation: termOpen 200ms ease;
+}
+
+@keyframes termOpen {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Title Bar ────────────────────────────────────────────────────────── */
+
+.term-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--term-surface);
+  border-bottom: 1px solid var(--term-border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.term-titlebar:active { cursor: grabbing; }
+
+.term-title-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.term-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.term-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: opacity 150ms;
+}
+.term-dot:hover { opacity: 0.8; }
+.term-dot--close { background: #EF4444; }
+.term-dot--minimize { background: #F59E0B; }
+.term-dot--maximize { background: #22C55E; }
+
+.term-title-text {
+  font-size: 11px;
+  color: var(--term-comment);
+  letter-spacing: 0.04em;
+}
+
+.term-title-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.term-btn-icon {
+  background: none;
+  border: none;
+  color: var(--term-comment);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 11px;
+  border-radius: 3px;
+  transition: all 150ms;
+}
+
+.term-btn-icon:hover {
+  color: var(--term-text);
+  background: rgba(255,255,255,0.08);
+}
+
+/* ── Output Area ──────────────────────────────────────────────────────── */
+
+.term-output {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--term-text);
+  scrollbar-width: thin;
+  scrollbar-color: var(--term-scrollbar) transparent;
+}
+
+.term-output::-webkit-scrollbar { width: 6px; }
+.term-output::-webkit-scrollbar-track { background: transparent; }
+.term-output::-webkit-scrollbar-thumb { background: var(--term-scrollbar); border-radius: 3px; }
+
+/* Output line types */
+.term-line { margin: 1px 0; white-space: pre-wrap; word-break: break-word; }
+.term-line--welcome { color: var(--term-cmd); }
+.term-line--success { color: var(--term-success); }
+.term-line--error { color: var(--term-error); }
+.term-line--warning { color: var(--term-warning); }
+.term-line--info { color: var(--term-data); }
+.term-line--comment { color: var(--term-comment); font-style: italic; }
+.term-line--cmd { color: var(--term-comment); }
+
+/* Syntax colored spans */
+.term-cmd-keyword { color: var(--term-cmd); font-weight: 600; }
+.term-paper-ref { color: var(--term-paper); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.term-paper-ref:hover { text-decoration-style: solid; }
+.term-string-val { color: var(--term-string); }
+.term-data-val { color: var(--term-data); }
+.term-operator { color: var(--term-data); }
+.term-error { color: var(--term-error); font-weight: 600; }
+.term-success-icon { color: var(--term-success); }
+.term-error-icon { color: var(--term-error); }
+
+/* Info box */
+.term-info-box {
+  border: 1px solid var(--term-border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: rgba(255,255,255,0.02);
+}
+
+/* ── Input Area ───────────────────────────────────────────────────────── */
+
+.term-input-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px 10px;
+  background: var(--term-bg);
+  border-top: 1px solid var(--term-border);
+  flex-shrink: 0;
+}
+
+.term-prompt-text {
+  color: var(--term-prompt);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+/* Input wrapper: positions highlight overlay behind the actual input */
+.term-input-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Highlight overlay: renders colored syntax BEHIND the transparent input */
+.term-input-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  pointer-events: none;
+  color: var(--term-text);
+  padding: 0;
+}
+
+/* Actual input: transparent text so highlight shows through, but caret visible */
+.term-input {
+  position: relative;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: transparent; /* Text invisible — highlight overlay shows the colored version */
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0;
+  caret-color: var(--term-cursor); /* Caret still visible */
+  z-index: 1; /* Above highlight overlay so caret and selection work */
+}
+
+.term-input::placeholder {
+  color: var(--term-comment);
+  opacity: 0.5;
+}
+
+/* When input has placeholder visible, make text slightly visible for placeholder */
+.term-input:placeholder-shown {
+  color: var(--term-comment);
+  opacity: 0.5;
+}
+
+/* Selection color — since text is transparent, selection needs a visible background */
+.term-input::selection {
+  background: var(--term-selection);
+  color: var(--term-text);
+}
+
+/* ── Auto-Complete Dropdown ───────────────────────────────────────────── */
+
+.term-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--term-surface);
+  border: 1px solid var(--term-border);
+  border-radius: 4px 4px 0 0;
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+  display: none;
+  z-index: 10;
+}
+
+.term-autocomplete.visible { display: block; }
+
+.term-ac-item {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--term-text);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.term-ac-item:hover,
+.term-ac-item.selected {
+  background: var(--term-selection);
+}
+
+.term-ac-item-cmd { color: var(--term-cmd); }
+.term-ac-item-desc { color: var(--term-comment); font-size: 10px; }
+
+/* ── Cursor Animation ─────────────────────────────────────────────────── */
+
+@keyframes termBlink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.term-cursor-blink {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--term-cursor);
+  animation: termBlink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 1px;
+}
+
+/* ── Typewriter Animation ─────────────────────────────────────────────── */
+
+.term-typewriter {
+  display: inline;
+}
+
+.term-typewriter .term-cursor-blink {
+  animation-duration: 0.5s;
+}
+
+/* ── Minimized State ──────────────────────────────────────────────────── */
+
+.arivu-terminal-window.minimized {
+  height: 32px !important;
+  min-height: 32px !important;
+  resize: none;
+}
+
+.arivu-terminal-window.minimized .term-output,
+.arivu-terminal-window.minimized .term-input-row {
+  display: none;
+}

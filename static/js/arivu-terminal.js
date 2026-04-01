@@ -34,8 +34,19 @@ class ArivuScriptStorage {
     return this._load().find(s => s.name.toLowerCase() === name.toLowerCase());
   }
 
+  /** Validate script name. Returns error string or null. */
+  validateName(name) {
+    if (!name || !name.trim()) return 'Script name cannot be empty';
+    if (name.length > 50) return 'Script name too long (max 50 characters)';
+    if (/[\x00-\x1F\x7F]/.test(name)) return 'Script name contains invalid characters';
+    return null;
+  }
+
   /** Save a new script. Returns the created script object. */
   save(name, commands, meta = {}) {
+    const nameError = this.validateName(name);
+    if (nameError) return { error: nameError };
+
     const scripts = this._load();
     // Overwrite if exists
     const idx = scripts.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
@@ -136,6 +147,13 @@ class ArivuScriptStorage {
 
 // Global script storage instance
 window.arivuScriptStorage = new ArivuScriptStorage();
+
+// Canonical meta-command filter — used everywhere scripts are saved from history.
+// Commands in this set are NOT executable graph operations, so they're excluded.
+const SCRIPT_META_COMMANDS = new Set([
+  'save', 'load', 'sessions', 'help', 'history', 'export', 'clear',
+  'exit', 'rename', 'delete', 'scripts', 'run', 'script',
+]);
 
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -632,17 +650,18 @@ class ArivuTerminal {
         // export session as script "name" — saves current session commands as a reusable script
         const storage = window.arivuScriptStorage;
         if (!storage) { this._print(` ✗ Script storage not available`, 'error'); break; }
-        // Filter out meta commands (save, load, help, etc.)
-        const metaCmds = new Set(['save', 'load', 'sessions', 'help', 'history', 'export', 'clear', 'exit', 'rename', 'delete', 'scripts', 'run']);
         const scriptCmds = this.history.filter(cmd => {
           const first = cmd.trim().split(/\s+/)[0].toLowerCase();
-          return !metaCmds.has(first) && !cmd.startsWith('#');
+          return !SCRIPT_META_COMMANDS.has(first) && !cmd.startsWith('#');
         });
         if (!scriptCmds.length) {
           this._print(` ✗ No executable commands in history to save as script`, 'error');
           break;
         }
+        const nameErr = storage.validateName(args.name);
+        if (nameErr) { this._print(` ✗ ${nameErr}`, 'error'); break; }
         const script = storage.save(args.name, scriptCmds);
+        if (script.error) { this._print(` ✗ ${script.error}`, 'error'); break; }
         this._print(` ✓ Script saved: "${script.name}" (v${script.version})`, 'success');
         this._print(`   ${script.commands.length} commands`, 'info');
         break;
@@ -669,16 +688,18 @@ class ArivuTerminal {
       case 'script_save': {
         const storage = window.arivuScriptStorage;
         if (!storage) { this._print(` ✗ Script storage not available`, 'error'); break; }
-        const metaCmds = new Set(['save', 'load', 'sessions', 'help', 'history', 'export', 'clear', 'exit', 'rename', 'delete', 'scripts', 'run', 'script']);
         const scriptCmds = this.history.filter(cmd => {
           const first = cmd.trim().split(/\s+/)[0].toLowerCase();
-          return !metaCmds.has(first) && !cmd.startsWith('#');
+          return !SCRIPT_META_COMMANDS.has(first) && !cmd.startsWith('#');
         });
         if (!scriptCmds.length) {
           this._print(` ✗ No executable commands in history to save`, 'error');
           break;
         }
+        const nameErr = storage.validateName(args.name);
+        if (nameErr) { this._print(` ✗ ${nameErr}`, 'error'); break; }
         const script = storage.save(args.name, scriptCmds, { description: args.desc || '' });
+        if (script.error) { this._print(` ✗ ${script.error}`, 'error'); break; }
         this._print(` ✓ Script saved: "${script.name}" (v${script.version})`, 'success');
         this._print(`   ${script.commands.length} commands${args.desc ? ' · ' + args.desc : ''}`, 'info');
         break;
@@ -694,15 +715,17 @@ class ArivuTerminal {
           break;
         }
         this._print(` ${scripts.length} script${scripts.length > 1 ? 's' : ''}:`, 'info');
-        this._printRaw(`   <span class="term-comment">#   Name                    Cmds  Ver   Runs  Graph</span>`);
-        this._printRaw(`   <span class="term-comment">${'─'.repeat(60)}</span>`);
+        this._printRaw(`   <span class="term-comment">#   Name                    Cmds  Ver   Runs  Last Run</span>`);
+        this._printRaw(`   <span class="term-comment">${'─'.repeat(65)}</span>`);
         scripts.forEach((s, i) => {
           const name = (s.name || 'Untitled').substring(0, 22).padEnd(22);
           const cmds = String(s.commands?.length || 0).padEnd(5);
           const ver = ('v' + (s.version || 1)).padEnd(5);
           const runs = String(s.runCount || 0).padEnd(5);
-          const graph = (s.graphTitle || '').substring(0, 20);
-          this._printRaw(`   ${String(i + 1).padEnd(4)}${name}  ${cmds} ${ver} ${runs} <span class="term-comment">${this.parser._esc(graph)}</span>`);
+          const lastRun = s.lastRun
+            ? new Date(s.lastRun).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            : 'never';
+          this._printRaw(`   ${String(i + 1).padEnd(4)}${name}  ${cmds} ${ver} ${runs} <span class="term-comment">${this.parser._esc(lastRun)}</span>`);
         });
         break;
       }
@@ -724,9 +747,13 @@ class ArivuTerminal {
         if (script.description) {
           this._print(`│ ${script.description.substring(0, 47).padEnd(47)} │`, 'info');
         }
+        const lastRun = script.lastRun
+          ? new Date(script.lastRun).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+          : 'never';
         this._print(`│ Version: ${('v' + (script.version || 1)).padEnd(8)} Commands: ${String(script.commands?.length || 0).padEnd(10)}│`, 'info');
         this._print(`│ Created: ${created.padEnd(14)} Modified: ${modified.padEnd(14)}│`, 'info');
-        this._print(`│ Runs: ${String(script.runCount || 0).padEnd(6)} Graph: ${(script.graphTitle || '—').substring(0, 20).padEnd(20)}│`, 'info');
+        this._print(`│ Runs: ${String(script.runCount || 0).padEnd(6)} Last run: ${lastRun.substring(0, 20).padEnd(20)}│`, 'info');
+        this._print(`│ Graph: ${(script.graphTitle || '—').substring(0, 39).padEnd(39)} │`, 'info');
         this._print(`├─────────────────────────────────────────────────┤`, 'info');
         this._print(`│ Commands:                                       │`, 'info');
         const preview = (script.commands || []).slice(0, 6);
@@ -983,6 +1010,31 @@ class ArivuTerminal {
   }
 
   _showHelp(topic) {
+    // Special expanded help for 'script' — show all subcommands
+    if (topic === 'script') {
+      this._print(' SCRIPT COMMANDS', 'welcome');
+      this._print(' ═══════════════', 'welcome');
+      this._print('');
+      const subCmds = [
+        ['script save "<name>" [--desc "..."]', 'Save current history as reusable script'],
+        ['script list', 'List all saved scripts'],
+        ['script info "<name>"', 'Show script details, metadata, and commands'],
+        ['script delete "<name>"', 'Delete a script (with y/n confirmation)'],
+        ['script copy "<name>" as "<new>"', 'Duplicate a script with a new name'],
+        ['script run "<name>"', 'Execute all commands in a script (batch mode)'],
+        ['script export "<name>"', 'Copy .arivu formatted text to clipboard'],
+      ];
+      for (const [syntax, desc] of subCmds) {
+        this._printRaw(`   <span class="term-cmd-keyword">${syntax.padEnd(42)}</span> <span class="term-comment">${desc}</span>`);
+      }
+      this._print('');
+      this._print(' Aliases:', 'info');
+      this._printRaw(`   <span class="term-cmd-keyword">scripts</span>          → script list`);
+      this._printRaw(`   <span class="term-cmd-keyword">run "<name>"</span>     → script run "<name>"`);
+      this._printRaw(`   <span class="term-cmd-keyword">delete script</span>    → script delete`);
+      return;
+    }
+
     if (topic && this.parser.commands[topic]) {
       const info = this.parser.commands[topic];
       this._printRaw(` <span class="term-cmd-keyword">${topic}</span> ${info.args}`);
@@ -1149,6 +1201,15 @@ class ArivuTerminal {
    * Uses requestAnimationFrame pacing for smooth output.
    */
   _runScript(script) {
+    // Recursion guard — prevent script from running itself
+    if (!this._runningScripts) this._runningScripts = new Set();
+    const scriptKey = (script.name || script.id || '').toLowerCase();
+    if (this._runningScripts.has(scriptKey)) {
+      this._print(` ✗ Recursive script detected: "${script.name}" is already running`, 'error');
+      return;
+    }
+    this._runningScripts.add(scriptKey);
+
     const cmds = script.commands || [];
     this._print(`┌─ Running: ${script.name} (${cmds.length} commands) ────────`, 'info');
     this._print(`│`, 'comment');
@@ -1160,7 +1221,8 @@ class ArivuTerminal {
 
     const runNext = () => {
       if (idx >= cmds.length) {
-        // Done
+        // Done — clear recursion guard
+        this._runningScripts?.delete(scriptKey);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this._print(`│`, 'comment');
         this._print(`└─ Complete: ${successes}/${cmds.length} OK, ${errors} errors (${elapsed}s)`, successes === cmds.length ? 'success' : 'warning');
@@ -1172,7 +1234,7 @@ class ArivuTerminal {
 
       // Skip blank lines and comments
       if (!cmd.trim() || cmd.trim().startsWith('#')) {
-        setTimeout(runNext, 50);
+        setTimeout(runNext, 0);
         return;
       }
 
@@ -1191,7 +1253,7 @@ class ArivuTerminal {
       if (result.error) {
         this._print(`│   ✗ ${result.error}`, 'error');
         errors++;
-        setTimeout(runNext, 100);
+        setTimeout(runNext, 10);
         return;
       }
 
@@ -1205,12 +1267,13 @@ class ArivuTerminal {
         }
       }
 
-      // Small delay between commands for visual feedback
-      setTimeout(runNext, 150);
+      // Batch mode: minimal delay for DOM rendering (fast summary)
+      // Phase 2 --verbose flag will use 150ms+ for typewriter mode
+      setTimeout(runNext, 10);
     };
 
-    // Start with a small delay
-    setTimeout(runNext, 200);
+    // Start with a brief delay
+    setTimeout(runNext, 50);
   }
 
   /**
