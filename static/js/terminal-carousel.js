@@ -514,9 +514,11 @@ class TerminalSessionCarousel {
       script += `# Graph: ${graphTitle} (${nodeCount} papers)\n`;
       script += `# Session: ${commands.length} commands\n`;
       script += `# ═══════════════════════════════════════════════\n\n`;
+      // Use canonical meta-command filter (same as terminal's SCRIPT_META_COMMANDS)
+      const metaFilter = new Set(['save', 'load', 'sessions', 'help', 'history', 'export', 'clear', 'exit', 'rename', 'delete', 'scripts', 'run', 'script']);
       for (const cmd of commands) {
         const first = cmd.trim().split(/\s+/)[0].toLowerCase();
-        if (['save', 'load', 'sessions', 'help', 'history', 'export', 'clear', 'exit', 'rename', 'delete'].includes(first)) continue;
+        if (metaFilter.has(first) || cmd.startsWith('#')) continue;
         script += cmd + '\n';
       }
 
