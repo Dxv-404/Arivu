@@ -169,21 +169,23 @@
 
 .term-input-row {
   display: flex;
-  align-items: baseline;
-  padding: 6px 12px 10px;
+  align-items: center;
+  padding: 8px 12px;
   background: var(--term-bg);
   border-top: 1px solid var(--term-border);
   flex-shrink: 0;
+  min-height: 32px;
 }
 
 .term-prompt-text {
   color: var(--term-prompt);
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   font-weight: 600;
   white-space: nowrap;
   margin-right: 8px;
+  flex-shrink: 0;
 }
 
 /* Input wrapper: positions highlight overlay behind the actual input */
@@ -191,6 +193,7 @@
   flex: 1;
   position: relative;
   overflow: hidden;
+  height: 18px; /* Fixed height = line-height so everything aligns */
 }
 
 /* Highlight overlay: renders colored syntax BEHIND the transparent input */
@@ -199,10 +202,10 @@
   top: 0;
   left: 0;
   right: 0;
-  bottom: 0;
+  height: 18px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   white-space: pre;
   pointer-events: none;
   color: var(--term-text);
@@ -211,16 +214,19 @@
 
 /* Actual input: transparent text so highlight shows through, but caret visible */
 .term-input {
+  display: block;
   position: relative;
   width: 100%;
+  height: 18px;
   background: transparent;
   border: none;
   outline: none;
   color: transparent; /* Text invisible — highlight overlay shows the colored version */
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   padding: 0;
+  margin: 0;
   caret-color: var(--term-cursor); /* Caret still visible */
   z-index: 1; /* Above highlight overlay so caret and selection work */
 }
