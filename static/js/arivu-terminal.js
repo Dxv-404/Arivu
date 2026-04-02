@@ -1313,6 +1313,7 @@ class ArivuTerminal {
     this.acDropdown.querySelectorAll('.term-ac-item').forEach(item => {
       item.addEventListener('click', () => {
         this.inputEl.value = item.dataset.text + ' ';
+        this._updateHighlight();
         this._hideAC();
         this.inputEl.focus();
       });
@@ -1367,6 +1368,7 @@ class ArivuTerminal {
     this.history.push(command);
     this.historyIndex = this.history.length;
     this.inputEl.value = '';
+    this._updateHighlight();
 
     this.isAnimating = false;
     this.animSpeed = 40;
