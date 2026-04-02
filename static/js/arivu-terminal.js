@@ -174,6 +174,9 @@ class ArivuTerminal {
     this.inputEl = null;
     this.acDropdown = null;
     this.acSelectedIndex = -1;
+    this._createdAt = Date.now();
+    this._gridIcon = 'terminal';
+    this._isPinned = false;
 
     this._buildDOM();
     this._attachEvents();
