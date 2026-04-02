@@ -1,0 +1,413 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   TERMINAL GRID — Pill, Grid Menu, Cards, Genie Warp, Icons, Context Menu
+   Black and white ONLY. No gold, no color accents.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Pill (Header Indicator) ─────────────────────────────────────────── */
+
+.term-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 4px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #999;
+  transition: color 150ms;
+  user-select: none;
+  vertical-align: middle;
+}
+
+.term-pill:hover {
+  color: #fff;
+}
+
+.term-pill-dot {
+  font-size: 10px;
+  color: #888;
+}
+
+.term-pill-text {
+  color: #999;
+  letter-spacing: 0.02em;
+}
+
+.term-pill-text.typing::after {
+  content: '|';
+  color: #D4A843;
+  animation: termBlink 1s step-end infinite;
+  margin-left: 1px;
+}
+
+/* ── Grid Menu (Dropdown) ────────────────────────────────────────────── */
+
+.term-grid-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9400;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.term-grid-backdrop.visible {
+  opacity: 1;
+}
+
+.term-grid-menu {
+  position: fixed;
+  z-index: 9450;
+  background: #111111;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  max-height: 70vh;
+  overflow-y: auto;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.96);
+  transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+.term-grid-menu.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.term-grid-menu::-webkit-scrollbar { width: 4px; }
+.term-grid-menu::-webkit-scrollbar-track { background: transparent; }
+.term-grid-menu::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+.term-grid-cards {
+  display: grid;
+  gap: 8px;
+}
+
+/* ── Grid Card (Normal Mode) ─────────────────────────────────────────── */
+
+.term-grid-card {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 150ms;
+  position: relative;
+  min-width: 100px;
+  min-height: 80px;
+}
+
+.term-grid-card:hover {
+  border-color: #666;
+  background: #222;
+}
+
+.term-grid-card.pinned {
+  border-color: #555;
+}
+
+.term-grid-card-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term-grid-card-stats {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.term-grid-card-dots {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: #fff;
+}
+
+.term-grid-pin-badge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 10px;
+  color: #888;
+}
+
+/* ── Grid Card (Icon Mode) ───────────────────────────────────────────── */
+
+.term-grid-card--icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 10px;
+}
+
+/* ── New Terminal Card ───────────────────────────────────────────────── */
+
+.term-grid-card--new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  border-color: #444;
+  background: transparent;
+  min-height: 80px;
+}
+
+.term-grid-card--new:hover {
+  border-color: #888;
+  background: rgba(255,255,255,0.02);
+}
+
+.term-grid-card-new-icon {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  color: #555;
+}
+
+.term-grid-card--new:hover .term-grid-card-new-icon {
+  color: #fff;
+}
+
+/* ── Hover Preview ───────────────────────────────────────────────────── */
+
+.term-grid-hover {
+  position: fixed;
+  z-index: 9500;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 220px;
+  max-width: 300px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: all 150ms;
+  pointer-events: none;
+}
+
+.term-grid-hover.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.term-grid-hover-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.term-grid-hover-stats {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.term-grid-hover-cmds {
+  max-height: 150px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+.term-grid-hover-cmd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #ccc;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term-grid-hover-ok { color: #4ade80; }
+.term-grid-hover-err { color: #f87171; }
+.term-grid-hover-empty { color: #555; font-style: italic; }
+
+/* ── Context Menu ────────────────────────────────────────────────────── */
+
+.term-grid-ctx {
+  position: fixed;
+  z-index: 9600;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 4px 0;
+  min-width: 200px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.term-grid-ctx-item {
+  padding: 6px 14px;
+  color: #ccc;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 100ms;
+}
+
+.term-grid-ctx-item:hover {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
+
+.term-grid-ctx-item svg {
+  opacity: 0.6;
+}
+
+.term-grid-ctx-sep {
+  height: 1px;
+  background: #333;
+  margin: 4px 0;
+}
+
+/* ── Icon Picker ─────────────────────────────────────────────────────── */
+
+.term-icon-picker {
+  position: fixed;
+  z-index: 9650;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  max-width: 280px;
+}
+
+.term-icon-picker-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.term-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.term-icon-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.term-icon-picker-item:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* ── Genie Warp Animation ────────────────────────────────────────────── */
+
+@keyframes genieMinimizeAnim {
+  0% {
+    clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+    transform: scale(1);
+    opacity: 1;
+  }
+  30% {
+    clip-path: polygon(5% 0%, 95% 0%, 85% 100%, 15% 100%);
+    transform: scale(0.8);
+  }
+  60% {
+    clip-path: polygon(15% 0%, 85% 0%, 65% 100%, 35% 100%);
+    transform: scale(0.5);
+    opacity: 0.8;
+  }
+  85% {
+    clip-path: polygon(30% 0%, 70% 0%, 55% 100%, 45% 100%);
+    transform: scale(0.2);
+  }
+  100% {
+    clip-path: polygon(45% 0%, 55% 0%, 52% 100%, 48% 100%);
+    transform: scale(0.05);
+    opacity: 0;
+  }
+}
+
+@keyframes genieMaximizeAnim {
+  0% {
+    clip-path: polygon(45% 0%, 55% 0%, 52% 100%, 48% 100%);
+    transform: scale(0.05);
+    opacity: 0;
+  }
+  20% {
+    clip-path: polygon(30% 0%, 70% 0%, 55% 100%, 45% 100%);
+    transform: scale(0.2);
+  }
+  50% {
+    clip-path: polygon(10% 0%, 90% 0%, 80% 100%, 20% 100%);
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  80% {
+    clip-path: polygon(0% 0%, 100% 0%, 102% 100%, -2% 100%);
+    transform: scale(1.05);
+    opacity: 1;
+  }
+  100% {
+    clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.arivu-terminal-window.term-genie-minimize {
+  animation: genieMinimizeAnim 400ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  pointer-events: none;
+}
+
+.arivu-terminal-window.term-genie-maximize {
+  animation: genieMaximizeAnim 400ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* ── Carousel Stats Tab — Flip Cards ─────────────────────────────────── */
+
+.stats-card {
+  perspective: 1000px;
+  cursor: pointer;
+}
+
+.stats-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.stats-card-inner.flipped {
+  transform: rotateY(180deg);
+}
+
+.stats-card-front,
+.stats-card-back {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  border-radius: 8px;
+}
+
+.stats-card-back {
+  transform: rotateY(180deg);
+}
