@@ -34,7 +34,8 @@ class ArivuTerminalParser {
       'scripts':    { args: '', desc: 'List saved scripts' },
       'run':        { args: '"<script-name>"', desc: 'Run a saved script' },
       'script':     { args: 'save|list|info|delete|copy|run "<name>"', desc: 'Script management commands' },
-      'rename':     { args: '"<new name>"', desc: 'Rename current session' },
+      'session':    { args: 'save|load|rename|delete|list|append', desc: 'Session management commands' },
+      'rename':     { args: '"<new name>"', desc: 'Deprecated → session rename' },
       'delete':     { args: 'session|script "<name>"', desc: 'Delete a session or script' },
       'exit':       { args: '', desc: 'Close terminal' },
     };
@@ -94,25 +95,25 @@ class ArivuTerminalParser {
         return { command: null, args: {}, raw, error: 'Usage: export session as script "<name>" | export session as text' };
       }
       case 'save': {
-        // save session "name"
         if (rest[0]?.toLowerCase() === 'session') {
           const name = rest.slice(1).join(' ').replace(/^["']|["']$/g, '');
-          return { command: 'save_session', args: { name }, error: name ? null : 'Usage: save session "<name>"', raw };
+          return { command: null, args: {}, raw, error: `Deprecated. Use: session save "${name || '<name>'}"` };
         }
-        return { command: null, args: {}, raw, error: 'Usage: save session "<name>"' };
+        return { command: null, args: {}, raw, error: 'Deprecated. Use: session save "<name>"' };
       }
       case 'load': {
         if (rest[0]?.toLowerCase() === 'session') {
           const name = rest.slice(1).join(' ').replace(/^["']|["']$/g, '');
-          return { command: 'load_session', args: { name }, error: name ? null : 'Usage: load session "<name>"', raw };
+          return { command: null, args: {}, raw, error: `Deprecated. Use: session load("${name || '<name>'}")` };
         }
-        return { command: null, args: {}, raw, error: 'Usage: load session "<name>"' };
+        return { command: null, args: {}, raw, error: 'Deprecated. Use: session load("<name>")' };
       }
-      case 'sessions': return { command: 'sessions', args: {}, error: null, raw };
+      case 'sessions': return { command: null, args: {}, raw, error: 'Deprecated. Use: session list' };
       case 'rename': {
         const name = rest.join(' ').replace(/^["']|["']$/g, '');
-        return { command: 'rename_session', args: { name }, error: name ? null : 'Usage: rename "<new name>"', raw };
+        return { command: null, args: {}, raw, error: `Deprecated. Use: session rename "<old>" "${name || '<new>'}"` };
       }
+      case 'session': return this._parseSession(rest, raw);
       case 'script': return this._parseScript(rest, raw);
       case 'run': {
         // Separate name, flags, and "as sequence"
@@ -303,6 +304,78 @@ class ArivuTerminalParser {
     if (current.trim()) args.push(current.trim());
     // Strip quotes from each arg
     return { args: args.map(a => a.replace(/^["']|["']$/g, '')), error: null };
+  }
+
+  _parseSession(tokens, raw) {
+    if (!tokens.length) return { command: null, args: {}, raw, error: 'Usage: session save|load|rename|delete|list|append' };
+    const sub = tokens[0].toLowerCase();
+    const rest = tokens.slice(1);
+
+    switch (sub) {
+      case 'save': {
+        const name = rest.join(' ').replace(/^["']|["']$/g, '');
+        if (!name) return { command: null, args: {}, raw, error: 'Usage: session save "<name>"' };
+        return { command: 'session_save', args: { name }, error: null, raw };
+      }
+      case 'load': {
+        // session load("name") or session load("name", replace|continue)
+        const bracketResult = this._extractBracketArgs(rest);
+        if (bracketResult.error) {
+          // Maybe they used space syntax: session load "name"
+          const name = rest.join(' ').replace(/^["']|["']$/g, '');
+          if (name) return { command: 'session_load', args: { name, mode: 'new' }, error: null, raw };
+          return { command: null, args: {}, raw, error: 'Usage: session load("<name>") or session load("<name>", replace|continue)' };
+        }
+        const name = bracketResult.args[0];
+        const mode = bracketResult.args[1]?.toLowerCase() || 'new';
+        if (!name) return { command: null, args: {}, raw, error: 'Missing session name' };
+        if (mode && !['new', 'replace', 'continue'].includes(mode)) {
+          return { command: null, args: {}, raw, error: `Invalid mode: '${mode}'. Must be replace or continue.` };
+        }
+        return { command: 'session_load', args: { name, mode }, error: null, raw };
+      }
+      case 'rename': {
+        // session rename "old" "new"
+        const oldName = rest[0]?.replace(/^["']|["']$/g, '');
+        const newName = rest.slice(1).join(' ').replace(/^["']|["']$/g, '');
+        if (!oldName) return { command: null, args: {}, raw, error: 'Usage: session rename "<old-name>" "<new-name>"' };
+        if (!newName) return { command: null, args: {}, raw, error: 'Usage: session rename "<old-name>" "<new-name>"' };
+        return { command: 'session_rename', args: { oldName, newName }, error: null, raw };
+      }
+      case 'delete': {
+        const name = rest.join(' ').replace(/^["']|["']$/g, '');
+        if (!name) return { command: null, args: {}, raw, error: 'Usage: session delete "<name>"' };
+        return { command: 'session_delete', args: { name }, error: null, raw };
+      }
+      case 'list': return { command: 'session_list', args: {}, error: null, raw };
+      case 'append': {
+        // session append("name", all|N|[N-M])
+        const bracketResult = this._extractBracketArgs(rest);
+        if (bracketResult.error) return { command: null, args: {}, raw, error: bracketResult.error };
+        const bArgs = bracketResult.args;
+        if (!bArgs.length || !bArgs[0]) return { command: null, args: {}, raw, error: 'Usage: session append("<name>", all|N|[N-M])' };
+
+        const targetName = bArgs[0];
+        let selector = { type: 'all' };
+
+        if (bArgs.length < 2 || bArgs[1]?.toLowerCase() === 'all') {
+          selector = { type: 'all' };
+        } else {
+          const sel = bArgs[1];
+          const rangeMatch = sel.match(/^\[(\d+)-(\d+)\]$/);
+          if (rangeMatch) {
+            selector = { type: 'range', start: parseInt(rangeMatch[1]), end: parseInt(rangeMatch[2]) };
+          } else if (/^\d+$/.test(sel)) {
+            selector = { type: 'single', index: parseInt(sel) };
+          } else {
+            return { command: null, args: {}, raw, error: `Invalid selector: '${sel}'. Use: all, N, or [N-M]` };
+          }
+        }
+        return { command: 'session_append', args: { name: targetName, selector }, error: null, raw };
+      }
+      default:
+        return { command: null, args: {}, raw, error: `Unknown session subcommand: '${sub}'. Options: save, load, rename, delete, list, append` };
+    }
   }
 
   _parseAnnotate(tokens, raw) {
