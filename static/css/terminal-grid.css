@@ -382,15 +382,22 @@
 
 /* ── Carousel Stats Tab — Flip Cards ─────────────────────────────────── */
 
-.stats-card {
+/* ── Stats Card (Carousel 3rd tab) ────────────────────────────────────── */
+
+.carousel-card.stats-card {
   perspective: 1000px;
   cursor: pointer;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  border: none;
 }
 
 .stats-card-inner {
   position: relative;
   width: 100%;
   height: 100%;
+  min-height: 460px;
   transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   transform-style: preserve-3d;
 }
@@ -402,12 +409,52 @@
 .stats-card-front,
 .stats-card-back {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   backface-visibility: hidden;
   border-radius: 8px;
+  background: #0D0D0D;
+  border: 1px solid #333;
+  box-sizing: border-box;
+}
+
+.stats-card-front.card-content,
+.stats-card-back.card-content {
+  padding: 20px;
 }
 
 .stats-card-back {
   transform: rotateY(180deg);
+  overflow: hidden;
 }
+
+/* ── Stats Log List (Back of card) ───────────────────────────────────── */
+
+.stats-log-list {
+  max-height: 360px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+  padding-top: 8px;
+}
+
+.stats-log-list::-webkit-scrollbar { width: 4px; }
+.stats-log-list::-webkit-scrollbar-track { background: transparent; }
+.stats-log-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+.stats-log-entry {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #ccc;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-log-ok { color: #4ade80; }
+.stats-log-err { color: #f87171; }
+.stats-log-time { color: #555; margin-right: 4px; }
+.stats-log-empty { color: #444; font-style: italic; padding: 20px 0; text-align: center; }

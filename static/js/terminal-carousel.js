@@ -139,6 +139,7 @@ class TerminalSessionCarousel {
     if (this.el) this.el.remove();
 
     const scripts = window.arivuScriptStorage?.list() || [];
+    const termCount = Object.keys(window.terminalManager?.terminals || {}).length;
     const overlay = document.createElement('div');
     overlay.className = 'carousel-overlay';
     overlay.innerHTML = `
@@ -150,6 +151,9 @@ class TerminalSessionCarousel {
           </button>
           <button class="carousel-tab ${this.activeTab === 'scripts' ? 'carousel-tab--active' : ''}" data-tab="scripts">
             Scripts <span class="carousel-tab-count">${scripts.length}</span>
+          </button>
+          <button class="carousel-tab ${this.activeTab === 'stats' ? 'carousel-tab--active' : ''}" data-tab="stats">
+            Stats <span class="carousel-tab-count">${termCount}</span>
           </button>
         </div>
       </div>
@@ -219,6 +223,10 @@ class TerminalSessionCarousel {
 
     if (this.activeTab === 'scripts') {
       this._renderScriptCards();
+      return;
+    }
+    if (this.activeTab === 'stats') {
+      this._renderStatsCards();
       return;
     }
 
@@ -361,6 +369,9 @@ class TerminalSessionCarousel {
     if (this.activeTab === 'scripts') {
       return (window.arivuScriptStorage?.list()?.length || 0) + 1;
     }
+    if (this.activeTab === 'stats') {
+      return Math.max(1, Object.keys(window.terminalManager?.terminals || {}).length);
+    }
     return this.sessions.length + 1;
   }
 
@@ -396,6 +407,16 @@ class TerminalSessionCarousel {
   // ── Session Actions ───────────────────────────────────────────────────
 
   _openActiveSession() {
+    if (this.activeTab === 'stats') {
+      // Stats cards flip on click — Enter does the same
+      const cards = this.trackEl.querySelectorAll('.carousel-card');
+      const activeCard = cards[this.activeIndex];
+      if (activeCard) {
+        const inner = activeCard.querySelector('.stats-card-inner');
+        if (inner) inner.classList.toggle('flipped');
+      }
+      return;
+    }
     if (this.activeTab === 'scripts') {
       const scripts = window.arivuScriptStorage?.list() || [];
       const script = scripts[this.activeIndex];
@@ -831,6 +852,121 @@ class TerminalSessionCarousel {
           }
         });
       }
+
+      this.trackEl.appendChild(card);
+    });
+  }
+
+  // ── Stats Cards (Terminal Stats + Logs Flip) ───────────────────────
+
+  _renderStatsCards() {
+    const tm = window.terminalManager;
+    if (!tm) return;
+
+    const terminals = Object.entries(tm.terminals);
+    if (!terminals.length) {
+      // No terminals — show empty state
+      const card = document.createElement('div');
+      card.className = 'carousel-card card-new';
+      card.dataset.index = '0';
+      card.innerHTML = `
+        <div class="card-new-inner">
+          <div class="card-new-icon" style="font-size:18px;">⊞</div>
+          <div class="card-new-text">No active terminals</div>
+        </div>
+      `;
+      this.trackEl.appendChild(card);
+      return;
+    }
+
+    terminals.forEach(([id, term], i) => {
+      const card = document.createElement('div');
+      card.className = 'carousel-card stats-card';
+      card.dataset.index = i;
+
+      const name = term.el?.querySelector('.term-title-text')?.textContent || `Terminal ${id.replace('term_', '#')}`;
+      const cmdCount = term.log?.length || 0;
+      const successCount = term.log?.filter(l => l.status === 'success').length || 0;
+      const errorCount = term.log?.filter(l => l.status === 'error').length || 0;
+      const isPinned = term._isPinned || false;
+      const linkedSession = term.linkedSessionId ? 'Linked' : '—';
+      const graphTitle = window._arivuGraph?.metadata?.seed_paper_title || '';
+
+      // Calculate uptime
+      const created = term._createdAt || Date.now();
+      const uptimeMin = Math.floor((Date.now() - created) / 60000);
+      const uptimeStr = uptimeMin < 60 ? `${uptimeMin} min` : `${Math.floor(uptimeMin / 60)}h ${uptimeMin % 60}m`;
+
+      // Build log entries for the back
+      const logEntries = (term.log || []).slice(-15);
+      let logHtml = '';
+      for (const entry of logEntries) {
+        const ts = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const icon = entry.status === 'error' ? '✗' : '✓';
+        const cls = entry.status === 'error' ? 'stats-log-err' : 'stats-log-ok';
+        const cmd = this._esc((entry.command || '').substring(0, 30));
+        logHtml += `<div class="stats-log-entry"><span class="${cls}">${icon}</span> <span class="stats-log-time">${ts}</span> ${cmd}</div>`;
+      }
+      if (!logEntries.length) {
+        logHtml = '<div class="stats-log-empty">No commands yet</div>';
+      }
+
+      card.innerHTML = `
+        <div class="stats-card-inner">
+          <div class="stats-card-front card-content">
+            <div class="card-header">
+              <div class="card-name">${this._esc(name)}</div>
+              <div class="card-date">${uptimeStr} ${isPinned ? '· <span style="color:#888">⊞ Pinned</span>' : ''}</div>
+            </div>
+            <div class="card-stats">
+              <div class="card-stat">
+                <div class="card-stat-val">${cmdCount}</div>
+                <div class="card-stat-label">Cmds</div>
+              </div>
+              <div class="card-stat">
+                <div class="card-stat-val" style="color:#4ade80">${successCount}</div>
+                <div class="card-stat-label">OK</div>
+              </div>
+              <div class="card-stat">
+                <div class="card-stat-val" style="color:#f87171">${errorCount}</div>
+                <div class="card-stat-label">Err</div>
+              </div>
+              <div class="card-stat">
+                <div class="card-stat-val">${linkedSession}</div>
+                <div class="card-stat-label">Session</div>
+              </div>
+            </div>
+            <div class="card-preview" style="text-align:center;padding-top:8px;">
+              <div style="font-size:10px;color:#555;font-family:'JetBrains Mono',monospace;">
+                ${this._esc(graphTitle.substring(0, 30))}
+              </div>
+              <div style="font-size:10px;color:#444;margin-top:4px;">Click to flip → Logs</div>
+            </div>
+          </div>
+          <div class="stats-card-back card-content">
+            <div class="card-header">
+              <div class="card-name">${this._esc(name)} — Logs</div>
+              <div class="card-date" style="cursor:pointer;color:#888;">↩ flip back</div>
+            </div>
+            <div class="stats-log-list">
+              ${logHtml}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Click anywhere on card → flip
+      card.addEventListener('click', () => {
+        if (!card.classList.contains('pos-0')) {
+          // Not active card — rotate carousel to it
+          this.activeIndex = i;
+          this._updatePositions();
+          this._renderDots();
+          return;
+        }
+        const inner = card.querySelector('.stats-card-inner');
+        if (inner) inner.classList.toggle('flipped');
+      });
 
       this.trackEl.appendChild(card);
     });
