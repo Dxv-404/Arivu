@@ -238,9 +238,13 @@ class ArivuTerminal {
         this._hideAC();
         const input = this.inputEl.value;
         if (input.trim()) {
+          const wasPendingConfirm = !!this._pendingConfirm;
           this._execute(input);
-          this.history.push(input);
-          this.historyIndex = this.history.length;
+          // Don't push y/n confirmation responses to history
+          if (!wasPendingConfirm) {
+            this.history.push(input);
+            this.historyIndex = this.history.length;
+          }
         }
         this.inputEl.value = '';
         this._updateHighlight();
@@ -688,17 +692,44 @@ class ArivuTerminal {
       case 'script_save': {
         const storage = window.arivuScriptStorage;
         if (!storage) { this._print(` ✗ Script storage not available`, 'error'); break; }
-        const scriptCmds = this.history.filter(cmd => {
-          const first = cmd.trim().split(/\s+/)[0].toLowerCase();
-          return !SCRIPT_META_COMMANDS.has(first) && !cmd.startsWith('#');
-        });
-        if (!scriptCmds.length) {
-          this._print(` ✗ No executable commands in history to save`, 'error');
-          break;
-        }
         const nameErr = storage.validateName(args.name);
         if (nameErr) { this._print(` ✗ ${nameErr}`, 'error'); break; }
-        const script = storage.save(args.name, scriptCmds, { description: args.desc || '' });
+
+        const { kept, removedTotal, removedSummary } = this._filterHistory();
+        if (!kept.length) {
+          this._print(` ✗ No executable commands in history to save`, 'error');
+          if (removedTotal > 0) this._print(`   (${removedTotal} meta commands filtered: ${removedSummary})`, 'comment');
+          break;
+        }
+
+        // Show filter summary
+        this._print(` Filtering ${this.history.length} commands: ${kept.length} kept, ${removedTotal} removed`, 'info');
+        if (removedTotal > 0) this._print(`   removed: ${removedSummary}`, 'comment');
+
+        // Check for overwrite
+        const existing = storage.get(args.name);
+        if (existing) {
+          this._print(` ⚠ Script "${args.name}" already exists (v${existing.version}, ${existing.commands?.length || 0} commands).`, 'warning');
+          this._print(`   Overwrite? [y/n]`, 'warning');
+          this._pendingConfirm = (input) => {
+            const answer = input.trim().toLowerCase();
+            if (answer === 'y' || answer === 'yes') {
+              const script = storage.save(args.name, kept, { description: args.desc || '' });
+              if (script.error) { this._print(` ✗ ${script.error}`, 'error'); }
+              else {
+                this._print(` ✓ Script saved: "${script.name}" (v${script.version})`, 'success');
+                this._print(`   ${script.commands.length} commands${args.desc ? ' · ' + args.desc : ''}`, 'info');
+              }
+            } else {
+              this._print(` Cancelled. Tip: use script append("${args.name}", all) to add commands.`, 'comment');
+            }
+            this._pendingConfirm = null;
+          };
+          break;
+        }
+
+        // New script — save directly
+        const script = storage.save(args.name, kept, { description: args.desc || '' });
         if (script.error) { this._print(` ✗ ${script.error}`, 'error'); break; }
         this._print(` ✓ Script saved: "${script.name}" (v${script.version})`, 'success');
         this._print(`   ${script.commands.length} commands${args.desc ? ' · ' + args.desc : ''}`, 'info');
@@ -740,30 +771,7 @@ class ArivuTerminal {
           if (names.length) this._print(`   Available: ${names.join(', ')}`, 'comment');
           break;
         }
-        const created = new Date(script.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        const modified = new Date(script.modified).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        this._print(`┌─────────────────────────────────────────────────┐`, 'info');
-        this._print(`│ Script: ${(script.name).substring(0, 38).padEnd(38)}  │`, 'info');
-        if (script.description) {
-          this._print(`│ ${script.description.substring(0, 47).padEnd(47)} │`, 'info');
-        }
-        const lastRun = script.lastRun
-          ? new Date(script.lastRun).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-          : 'never';
-        this._print(`│ Version: ${('v' + (script.version || 1)).padEnd(8)} Commands: ${String(script.commands?.length || 0).padEnd(10)}│`, 'info');
-        this._print(`│ Created: ${created.padEnd(14)} Modified: ${modified.padEnd(14)}│`, 'info');
-        this._print(`│ Runs: ${String(script.runCount || 0).padEnd(6)} Last run: ${lastRun.substring(0, 20).padEnd(20)}│`, 'info');
-        this._print(`│ Graph: ${(script.graphTitle || '—').substring(0, 39).padEnd(39)} │`, 'info');
-        this._print(`├─────────────────────────────────────────────────┤`, 'info');
-        this._print(`│ Commands:                                       │`, 'info');
-        const preview = (script.commands || []).slice(0, 6);
-        for (const cmd of preview) {
-          this._printRaw(`│   <span class="term-cmd-keyword">${this.parser._esc(cmd.substring(0, 44))}</span>`.padEnd(70) + `│`);
-        }
-        if ((script.commands || []).length > 6) {
-          this._print(`│   ... ${script.commands.length - 6} more commands`.padEnd(49) + `│`, 'comment');
-        }
-        this._print(`└─────────────────────────────────────────────────┘`, 'info');
+        this._renderScriptInfoBox(script);
         break;
       }
 
@@ -1009,62 +1017,134 @@ class ArivuTerminal {
     this._printRaw(`   ${'Bottleneck'.padEnd(15)} <span class="term-data-val">${(n1.is_bottleneck ? 'Yes' : 'No').padEnd(15)}</span> <span class="term-data-val">${n2.is_bottleneck ? 'Yes' : 'No'}</span>`);
   }
 
+  _helpSyntax(syntax, desc) {
+    // Render help line with <param> tokens highlighted
+    const colored = syntax.replace(/<([^>]+)>/g, '<span class="term-help-param">&lt;$1&gt;</span>');
+    this._printRaw(`   ${colored.padEnd(55)} <span class="term-comment">${desc}</span>`);
+  }
+
   _showHelp(topic) {
-    // Special expanded help for 'script' — show all subcommands
+    // ── Expanded help for 'script' ──
     if (topic === 'script') {
       this._print(' SCRIPT COMMANDS', 'welcome');
       this._print(' ═══════════════', 'welcome');
       this._print('');
-      const subCmds = [
-        ['script save "<name>" [--desc "..."]', 'Save current history as reusable script'],
+      const cmds = [
+        ['script save <name> [--desc <text>]', 'Save history as script'],
         ['script list', 'List all saved scripts'],
-        ['script info "<name>"', 'Show script details, metadata, and commands'],
-        ['script delete "<name>"', 'Delete a script (with y/n confirmation)'],
-        ['script copy "<name>" as "<new>"', 'Duplicate a script with a new name'],
-        ['script run "<name>"', 'Execute all commands in a script (batch mode)'],
-        ['script export "<name>"', 'Copy .arivu formatted text to clipboard'],
+        ['script info <name>', 'Show script details + commands'],
+        ['script delete <name>', 'Delete script (with y/n)'],
+        ['script copy <name> as <new-name>', 'Duplicate a script'],
+        ['script run <name>', 'Run batch (fast)'],
+        ['script run <name> --slow', 'Run with 500ms delay'],
+        ['script run <name> --verbose', 'Run with typewriter'],
+        ['script run <name> as sequence', 'Step-by-step (Enter to advance)'],
+        ['script export <name>', 'Copy .arivu to clipboard'],
+        ['script append(<name>, <selector>)', 'Append commands to script'],
       ];
-      for (const [syntax, desc] of subCmds) {
-        this._printRaw(`   <span class="term-cmd-keyword">${syntax.padEnd(42)}</span> <span class="term-comment">${desc}</span>`);
-      }
+      for (const [s, d] of cmds) this._helpSyntax(s, d);
+      this._print('');
+      this._print(' Selectors for append:', 'info');
+      this._helpSyntax('  all', 'All filtered history commands');
+      this._helpSyntax('  <N>', 'Single command #N');
+      this._helpSyntax('  [<N>-<M>]', 'Range from #N to #M');
+      this._helpSyntax('  from: <script>', 'All from another script');
+      this._helpSyntax('  from: <script>, <N>', 'Single from another script');
       this._print('');
       this._print(' Aliases:', 'info');
-      this._printRaw(`   <span class="term-cmd-keyword">scripts</span>          → script list`);
-      this._printRaw(`   <span class="term-cmd-keyword">run "<name>"</span>     → script run "<name>"`);
-      this._printRaw(`   <span class="term-cmd-keyword">delete script</span>    → script delete`);
+      this._printRaw(`   <span class="term-cmd-keyword">scripts</span>            → script list`);
+      this._printRaw(`   <span class="term-cmd-keyword">run <span class="term-help-param">&lt;name&gt;</span></span>       → script run <name>`);
       return;
     }
 
+    // ── Expanded help for 'session' ──
+    if (topic === 'session') {
+      this._print(' SESSION COMMANDS', 'welcome');
+      this._print(' ════════════════', 'welcome');
+      this._print('');
+      const cmds = [
+        ['session save <name>', 'Save terminal state'],
+        ['session load(<name>)', 'Load in new window'],
+        ['session load(<name>, replace)', 'Replace current terminal'],
+        ['session load(<name>, continue)', 'Load into current terminal'],
+        ['session rename <old> <new>', 'Rename a session'],
+        ['session delete <name>', 'Delete session (with y/n)'],
+        ['session list', 'List all sessions'],
+        ['session append(<name>, <selector>)', 'Append commands to session'],
+      ];
+      for (const [s, d] of cmds) this._helpSyntax(s, d);
+      this._print('');
+      this._print(' Selectors for append:', 'info');
+      this._helpSyntax('  all', 'All filtered history commands');
+      this._helpSyntax('  <N>', 'Single command #N');
+      this._helpSyntax('  [<N>-<M>]', 'Range from #N to #M');
+      return;
+    }
+
+    // ── Single command help ──
     if (topic && this.parser.commands[topic]) {
       const info = this.parser.commands[topic];
-      this._printRaw(` <span class="term-cmd-keyword">${topic}</span> ${info.args}`);
+      const colored = info.args.replace(/<([^>]+)>/g, '<span class="term-help-param">&lt;$1&gt;</span>');
+      this._printRaw(` <span class="term-cmd-keyword">${topic}</span> ${colored}`);
       this._print(`   ${info.desc}`, 'comment');
       return;
     }
 
-    const sections = {
-      'Graph Navigation': ['zoom', 'highlight', 'filter', 'reset'],
-      'Annotations': ['annotate', 'remove', 'clear', 'ls'],
-      'Analysis': ['info', 'compare', 'path', 'deep-dive', 'pathfinder', 'find'],
-      'Sessions': ['save', 'load', 'sessions', 'rename', 'delete'],
-      'Scripts': ['script', 'run', 'scripts'],
-      'Utility': ['help', 'history', 'export', 'exit'],
-    };
+    // ── Full help listing ──
+    const helpData = [
+      ['Graph Navigation', [
+        ['zoom <paper>', 'Zoom graph to paper node'],
+        ['highlight <paper>', 'Highlight node with gold pulse'],
+        ['filter <type>', 'Apply graph filter'],
+        ['reset', 'Reset all graph state'],
+      ]],
+      ['Annotations', [
+        ['annotate <paper> as <label>', 'Add annotation badge'],
+        ['remove annotation <paper>', 'Remove annotation'],
+        ['clear annotations', 'Clear all annotations'],
+        ['ls annotations', 'List active annotations'],
+      ]],
+      ['Analysis', [
+        ['info <paper>', 'Show paper statistics'],
+        ['compare <paper> and <paper>', 'Side-by-side comparison'],
+        ['path <paper> to <paper>', 'Find path between papers'],
+        ['deep-dive <paper>', 'Athena deep dive analysis'],
+        ['pathfinder <query>', 'Pathfinder analysis'],
+        ['find <search>', 'Search papers by name'],
+      ]],
+      ['Sessions', [
+        ['session save <name>', 'Save terminal state'],
+        ['session load(<name>)', 'Load session'],
+        ['session list', 'List all sessions'],
+        ['session delete <name>', 'Delete session'],
+      ]],
+      ['Scripts', [
+        ['script save <name>', 'Save history as script'],
+        ['script run <name> [flags]', 'Execute script'],
+        ['script list', 'List all scripts'],
+        ['script info <name>', 'Show script details'],
+        ['script append(<name>, <sel>)', 'Append to script'],
+      ]],
+      ['Utility', [
+        ['help [<command>]', 'Show help'],
+        ['history [--errors]', 'Show command history'],
+        ['clear [screen|annotations]', 'Clear terminal'],
+        ['exit', 'Close terminal'],
+      ]],
+    ];
 
     this._print(' ARIVU TERMINAL COMMANDS', 'welcome');
     this._print(' ═══════════════════════', 'welcome');
 
-    for (const [section, cmds] of Object.entries(sections)) {
+    for (const [section, cmds] of helpData) {
       this._print('');
       this._print(` ${section}`, 'info');
-      for (const cmd of cmds) {
-        const info = this.parser.commands[cmd];
-        if (!info) continue;
-        this._printRaw(`   <span class="term-cmd-keyword">${cmd.padEnd(16)}</span> <span class="term-comment">${this.parser._esc(info.desc)}</span>`);
+      for (const [syntax, desc] of cmds) {
+        this._helpSyntax(syntax, desc);
       }
     }
     this._print('');
-    this._print(' Tip: Use Tab for auto-complete. Paper names are fuzzy-matched.', 'comment');
+    this._print(' Tip: Tab for autocomplete · help script · help session', 'comment');
   }
 
   _suggestPapers(query) {
@@ -1274,6 +1354,113 @@ class ArivuTerminal {
 
     // Start with a brief delay
     setTimeout(runNext, 50);
+  }
+
+  // ── Filter Helper: shows what gets kept/removed before saving ──────────
+
+  /**
+   * Filter history through SCRIPT_META_COMMANDS and return filtered list.
+   * Also builds a summary of what was removed for verbose display.
+   */
+  _filterHistory() {
+    const kept = [];
+    const removedCounts = {};
+    for (const cmd of this.history) {
+      const first = cmd.trim().split(/\s+/)[0].toLowerCase();
+      if (SCRIPT_META_COMMANDS.has(first) || cmd.startsWith('#')) {
+        removedCounts[first] = (removedCounts[first] || 0) + 1;
+      } else {
+        kept.push(cmd);
+      }
+    }
+    const removedTotal = this.history.length - kept.length;
+    const removedSummary = Object.entries(removedCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([k, v]) => `${k} ×${v}`)
+      .join(', ');
+    return { kept, removedTotal, removedSummary };
+  }
+
+  // ── Box Renderer (MySQL-style, lavender) ──────────────────────────────
+
+  /**
+   * Render a box with header, data rows, and optional command listing.
+   * All borders use lavender, labels gray, values white.
+   * @param {string} title - Header text
+   * @param {string} badge - Right-aligned badge (e.g., "v3")
+   * @param {Array<[string,string]>} data - Key-value pairs for stats
+   * @param {string[]} commands - Command list to show
+   * @param {string} [description] - Optional description below header
+   */
+  _renderBox(title, badge, data, commands, description) {
+    const W = 50; // inner width
+    const B = (s) => `<span class="term-box-border">${s}</span>`;
+    const H = (s) => `<span class="term-box-header">${s}</span>`;
+    const L = (s) => `<span class="term-box-label">${s}</span>`;
+    const V = (s) => `<span class="term-box-value">${s}</span>`;
+
+    // Header line: ┌─ Title ────── badge ─┐
+    const titleText = this.parser._esc(title.substring(0, W - (badge?.length || 0) - 6));
+    const badgeText = badge ? ` ${this.parser._esc(badge)} ` : '';
+    const dashesAfterTitle = W - titleText.length - badgeText.length - 2;
+    this._printRaw(`${B('┌─')} ${H(titleText)} ${B('─'.repeat(Math.max(1, dashesAfterTitle)))}${badgeText ? H(badgeText) : ''}${B('─┐')}`);
+
+    // Description (if present)
+    if (description) {
+      this._printRaw(`${B('│')} ${L(this.parser._esc(description.substring(0, W - 1)).padEnd(W))}${B('│')}`);
+    }
+    this._printRaw(`${B('│')}${' '.repeat(W + 1)}${B('│')}`);
+
+    // Data rows (two columns)
+    for (let i = 0; i < data.length; i += 2) {
+      const [k1, v1] = data[i] || ['', ''];
+      const [k2, v2] = data[i + 1] || ['', ''];
+      const left = `${L((k1 + '').padEnd(12))} ${V((v1 + '').padEnd(12))}`;
+      const right = k2 ? `${L((k2 + '').padEnd(12))} ${V(v2 + '')}` : '';
+      this._printRaw(`${B('│')}  ${left}${right.padEnd(W - 25)}${B('│')}`);
+    }
+
+    // Commands section
+    if (commands?.length) {
+      this._printRaw(`${B('│')}${' '.repeat(W + 1)}${B('│')}`);
+      this._printRaw(`${B('├')}${B('─'.repeat(W + 1))}${B('┤')}`);
+      this._printRaw(`${B('│')}${' '.repeat(W + 1)}${B('│')}`);
+      commands.forEach((cmd, i) => {
+        const num = `${L(String(i + 1).padStart(3))}  `;
+        const highlighted = this.parser.highlight(cmd.substring(0, W - 6));
+        this._printRaw(`${B('│')} ${num}${highlighted}${''.padEnd(Math.max(0, W - 6 - cmd.substring(0, W - 6).length))}${B('│')}`);
+      });
+    }
+
+    this._printRaw(`${B('│')}${' '.repeat(W + 1)}${B('│')}`);
+    this._printRaw(`${B('└')}${B('─'.repeat(W + 1))}${B('┘')}`);
+  }
+
+  /**
+   * Render script info using the box renderer.
+   */
+  _renderScriptInfoBox(script) {
+    const created = new Date(script.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const modified = new Date(script.modified).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const lastRun = script.lastRun
+      ? new Date(script.lastRun).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : 'never';
+
+    this._renderBox(
+      script.name,
+      'v' + (script.version || 1),
+      [
+        ['Commands', String(script.commands?.length || 0)],
+        ['Runs', String(script.runCount || 0)],
+        ['Created', created],
+        ['Last run', lastRun],
+        ['Modified', modified],
+        ['Graph', (script.graphTitle || '—').substring(0, 20)],
+      ],
+      script.commands || [],
+      script.description || null
+    );
   }
 
   /**

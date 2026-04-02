@@ -507,6 +507,24 @@ class ArivuTerminalParser {
       return [];
     }
 
+    // ── Export completion ──
+    if (cmd === 'export') {
+      if (tokens.length === 2) {
+        return ['session'].filter(s => s.startsWith(argText))
+          .map(s => ({ text: `export ${s}`, desc: 'Export session data', type: 'arg' }));
+      }
+      if (tokens[1]?.toLowerCase() === 'session' && tokens.length === 3) {
+        return ['as'].filter(s => s.startsWith(tokens[2]?.toLowerCase() || ''))
+          .map(s => ({ text: `export session ${s}`, desc: '', type: 'arg' }));
+      }
+      if (tokens[1]?.toLowerCase() === 'session' && tokens[2]?.toLowerCase() === 'as' && tokens.length === 4) {
+        return ['script', 'text']
+          .filter(s => s.startsWith(tokens[3]?.toLowerCase() || ''))
+          .map(s => ({ text: `export session as ${s}`, desc: s === 'script' ? 'Save as reusable script' : 'Copy to clipboard', type: 'arg' }));
+      }
+      return [];
+    }
+
     // ── Help completion ──
     if (cmd === 'help') {
       return Object.entries(this.commands)
@@ -584,44 +602,118 @@ class ArivuTerminalParser {
       }));
   }
 
+  // ── Subcommand Map: which second-tokens get gold highlighting ──
+  static SUBCOMMAND_MAP = {
+    'script':  new Set(['save','list','info','delete','copy','run','export','append','diff','edit','history','revert']),
+    'session': new Set(['save','load','rename','delete','list','append']),
+    'export':  new Set(['session']),
+    'delete':  new Set(['session','script']),
+    'remove':  new Set(['annotation','annotations']),
+    'clear':   new Set(['annotations','screen','variables']),
+    'ls':      new Set(['annotations','papers','scripts','variables','sessions']),
+  };
+
+  // ── Mode keywords: get green highlighting ──
+  static MODE_KEYWORDS = new Set(['replace','continue','all','sequence']);
+
   /**
    * Syntax-highlight a command string for display.
    * Returns HTML with colored spans.
+   *
+   * Priority order:
+   *  1. Rich markup (===, ---, ##, #!, # TODO, # WARN, #)
+   *  2. Command keyword (1st token)
+   *  3. Sub-command keyword (2nd token, context-aware)
+   *  4. Flags (--xxx) → green
+   *  5. Mode keywords (replace, continue, all, sequence) → green
+   *  6. Operators (as, to, and, from, etc.) → teal
+   *  7. Brackets/parens/commas → white
+   *  8. Strings ("...") → sky blue
+   *  9. Numbers → teal
+   * 10. Default → white
    */
   highlight(input) {
     if (!input) return '';
+    const trimmed = input.trim();
+
+    // ── Rich markup — detect BEFORE tokenization ──
+    if (/^={3,}$/.test(trimmed))
+      return `<span class="term-hl-rule">${'═'.repeat(48)}</span>`;
+    if (/^-{2,}$/.test(trimmed))
+      return `<span class="term-hl-rule">${'─'.repeat(48)}</span>`;
+    if (/^## /.test(trimmed))
+      return `<span class="term-hl-header">${this._esc(trimmed)}</span>`;
+    if (/^#!\s*(\w+):\s*(.*)/.test(trimmed)) {
+      const m = trimmed.match(/^(#!\s*\w+:)\s*(.*)/);
+      return `<span class="term-hl-meta-key">${this._esc(m[1])}</span> <span class="term-hl-meta-val">${this._esc(m[2])}</span>`;
+    }
+    if (/^#\s*TODO:/i.test(trimmed))
+      return `<span class="term-hl-todo">${this._esc(trimmed)}</span>`;
+    if (/^#\s*WARN:/i.test(trimmed))
+      return `<span class="term-hl-warn">${this._esc(trimmed)}</span>`;
+    if (/^#/.test(trimmed))
+      return `<span class="term-hl-comment">${this._esc(trimmed)}</span>`;
+
+    // ── Normal tokenization ──
     const tokens = this._tokenize(input);
     if (!tokens.length) return this._esc(input);
+
+    const cmd = tokens[0]?.toLowerCase() || '';
+    const subCmds = ArivuTerminalParser.SUBCOMMAND_MAP[cmd];
 
     let html = '';
     let pos = 0;
 
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
+      const tokenLower = token.toLowerCase();
       const idx = input.indexOf(token, pos);
-      // Add any whitespace before this token
+
+      // Preserve whitespace before this token
       if (idx > pos) html += input.substring(pos, idx);
 
       if (i === 0) {
-        // Command keyword
-        const isValid = token.toLowerCase() in this.commands;
+        // First token: command keyword
+        const isValid = tokenLower in this.commands;
         html += `<span class="${isValid ? 'term-cmd-keyword' : 'term-error'}">${this._esc(token)}</span>`;
-      } else if (this.operators.has(token.toLowerCase())) {
-        html += `<span class="term-operator">${this._esc(token)}</span>`;
-      } else if (token.startsWith('"') || token.startsWith("'")) {
-        html += `<span class="term-string-val">${this._esc(token)}</span>`;
-      } else if (/^\d+(\.\d+)?$/.test(token)) {
-        html += `<span class="term-data-val">${this._esc(token)}</span>`;
+
+      } else if (i === 1 && subCmds?.has(tokenLower)) {
+        // Second token: sub-command (gold, same as command)
+        html += `<span class="term-cmd-keyword">${this._esc(token)}</span>`;
+
       } else if (token.startsWith('--')) {
+        // Flags: --verbose, --slow, --desc, etc. → green
+        html += `<span class="term-flag">${this._esc(token)}</span>`;
+
+      } else if (ArivuTerminalParser.MODE_KEYWORDS.has(tokenLower)) {
+        // Mode keywords: replace, continue, all, sequence → green
+        html += `<span class="term-mode">${this._esc(token)}</span>`;
+
+      } else if (this.operators.has(tokenLower)) {
+        // Operators: as, to, and, from, etc. → teal
         html += `<span class="term-operator">${this._esc(token)}</span>`;
+
+      } else if (/^[()[\],]$/.test(token) || token.startsWith('(') || token.endsWith(')') || token.startsWith('[') || token.endsWith(']')) {
+        // Brackets, parens, commas → white (but we need to handle mixed tokens like '("name",' )
+        html += `<span class="term-bracket">${this._esc(token)}</span>`;
+
+      } else if (token.startsWith('"') || token.startsWith("'")) {
+        // Strings → sky blue
+        html += `<span class="term-string-val">${this._esc(token)}</span>`;
+
+      } else if (/^\d+(\.\d+)?$/.test(token)) {
+        // Numbers → teal
+        html += `<span class="term-data-val">${this._esc(token)}</span>`;
+
       } else {
-        // Could be a paper name — keep default color
+        // Default: paper names, other text → white (inherit)
         html += this._esc(token);
       }
+
       pos = idx + token.length;
     }
 
-    // Any trailing text
+    // Trailing text
     if (pos < input.length) html += input.substring(pos);
     return html;
   }

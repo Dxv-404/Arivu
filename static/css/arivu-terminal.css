@@ -11,7 +11,7 @@
   --term-prompt: #22C55E;
   --term-cmd: #D4A843;
   --term-paper: #3B82F6;
-  --term-string: #F59E0B;
+  --term-string: #38BDF8;
   --term-data: #06B6D4;
   --term-error: #EF4444;
   --term-warning: #F59E0B;
@@ -20,6 +20,12 @@
   --term-cursor: #D4A843;
   --term-selection: #264F78;
   --term-scrollbar: #30363D;
+  --term-flag: #22C55E;
+  --term-mode: #22C55E;
+  --term-header: #A78BFA;
+  --term-box-border: #A78BFA;
+  --term-box-label: #94A3B8;
+  --term-seq-prompt: #A78BFA;
 }
 
 /* ── Terminal Window ──────────────────────────────────────────────────── */
@@ -153,8 +159,33 @@
 .term-data-val { color: var(--term-data); }
 .term-operator { color: var(--term-data); }
 .term-error { color: var(--term-error); font-weight: 600; }
+.term-flag { color: var(--term-flag); }
+.term-mode { color: var(--term-mode); font-weight: 500; }
+.term-bracket { color: var(--term-text); }
 .term-success-icon { color: var(--term-success); }
 .term-error-icon { color: var(--term-error); }
+
+/* Rich comment/markup */
+.term-hl-comment { color: var(--term-comment); font-style: italic; }
+.term-hl-header { color: var(--term-header); font-weight: 700; }
+.term-hl-rule { color: var(--term-comment); }
+.term-hl-meta-key { color: var(--term-comment); }
+.term-hl-meta-val { color: var(--term-text); }
+.term-hl-todo { color: var(--term-warning); font-weight: 600; }
+.term-hl-warn { color: var(--term-error); font-weight: 600; }
+
+/* Box renderer (lavender) */
+.term-box-border { color: var(--term-box-border); }
+.term-box-header { color: var(--term-header); font-weight: 600; }
+.term-box-label { color: var(--term-box-label); }
+.term-box-value { color: var(--term-text); }
+
+/* Sequence mode prompt */
+.term-seq-prompt { color: var(--term-seq-prompt); font-weight: 600; }
+.term-seq-hint { color: var(--term-comment); font-size: 11px; }
+
+/* Help syntax tokens */
+.term-help-param { color: var(--term-data); font-style: italic; }
 
 /* Info box */
 .term-info-box {
