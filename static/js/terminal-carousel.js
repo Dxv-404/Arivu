@@ -306,7 +306,19 @@ class TerminalSessionCarousel {
         });
         card.querySelector('.card-btn--delete')?.addEventListener('click', (e) => {
           e.stopPropagation();
-          this._deleteSessionCard(session.id, card);
+          const btn = e.currentTarget;
+          if (btn.dataset.confirmed) {
+            this._deleteSessionCard(session.id, card);
+          } else {
+            btn.textContent = 'Sure?';
+            btn.style.color = '#ef4444';
+            btn.dataset.confirmed = 'true';
+            setTimeout(() => {
+              btn.textContent = '✕';
+              btn.style.color = '';
+              delete btn.dataset.confirmed;
+            }, 3000);
+          }
         });
 
         // Click card: non-active → rotate to it, active → open detail view
@@ -744,7 +756,19 @@ class TerminalSessionCarousel {
         });
         card.querySelector('.card-btn--delete')?.addEventListener('click', (e) => {
           e.stopPropagation();
-          this._deleteScriptCard(script.name, card);
+          const btn = e.currentTarget;
+          if (btn.dataset.confirmed) {
+            this._deleteScriptCard(script.name, card);
+          } else {
+            btn.textContent = 'Sure?';
+            btn.style.color = '#ef4444';
+            btn.dataset.confirmed = 'true';
+            setTimeout(() => {
+              btn.textContent = '✕';
+              btn.style.color = '';
+              delete btn.dataset.confirmed;
+            }, 3000);
+          }
         });
 
         // Click card: non-active → rotate, active → show detail
