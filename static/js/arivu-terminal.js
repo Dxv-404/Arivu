@@ -1841,10 +1841,21 @@ class ArivuTerminal {
   close() {
     this.el.remove();
     if (window.terminalManager) window.terminalManager.remove(this.id);
+    if (window.terminalGrid) window.terminalGrid.updatePill();
   }
 
   toggleMinimize() {
-    this.el.classList.toggle('minimized');
+    if (this.el.classList.contains('minimized')) {
+      // Unminimize — just remove the class (genie maximize handled by grid)
+      this.el.classList.remove('minimized');
+    } else {
+      // Minimize — use genie warp if grid manager exists
+      if (window.terminalGrid) {
+        window.terminalGrid.genieMinimize(this);
+      } else {
+        this.el.classList.add('minimized');
+      }
+    }
   }
 
   toggleMaximize() {
@@ -1891,6 +1902,8 @@ class TerminalManager {
 
     const term = new ArivuTerminal(id, graphData);
     this.terminals[id] = term;
+    // Notify grid manager
+    if (window.terminalGrid) window.terminalGrid.updatePill();
     return term;
   }
 
