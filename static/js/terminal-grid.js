@@ -147,11 +147,15 @@ class TerminalGridManager {
   }
 
   closeGrid() {
-    if (!this.isGridOpen || !this.gridEl) return;
-    this.gridEl.classList.remove('visible');
+    if (!this.isGridOpen) return;
+    this.gridEl?.classList.remove('visible');
+    this._gridBackdrop?.classList.remove('visible');
+    this._hideHoverPreview();
     setTimeout(() => {
       this.gridEl?.remove();
       this.gridEl = null;
+      this._gridBackdrop?.remove();
+      this._gridBackdrop = null;
       this.isGridOpen = false;
     }, 200);
   }
