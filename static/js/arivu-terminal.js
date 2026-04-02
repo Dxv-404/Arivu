@@ -923,13 +923,34 @@ class ArivuTerminal {
         this.close();
         break;
 
-      case 'save_session': {
+      // ── Session Commands (unified namespace) ──────────────────────────
+
+      case 'session_save': {
         const carousel = window.terminalCarousel;
-        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); return; }
-        const session = carousel.saveSession(args.name, {
-          history: this.history,
-          log: this.log,
-        });
+        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
+        // Check for overwrite
+        const existing = carousel.getSession(args.name);
+        if (existing) {
+          this._print(` ⚠ Session "${args.name}" already exists (${existing.totalCommands || 0} commands).`, 'warning');
+          this._print(`   Overwrite? [y/n]`, 'warning');
+          this._pendingConfirm = (input) => {
+            const answer = input.trim().toLowerCase();
+            if (answer === 'y' || answer === 'yes') {
+              // Delete old, save new
+              carousel.deleteSession(existing.id);
+              const session = carousel.saveSession(args.name, { history: this.history, log: this.log });
+              this.linkedSessionId = session.id;
+              this._updateTitle(session.name);
+              this._print(` ✓ Session saved: ${session.name} (overwritten)`, 'success');
+              this._print(`   ${session.totalCommands} commands, ${session.annotationCount} annotations`, 'info');
+            } else {
+              this._print(` Cancelled. Tip: use session append("${args.name}", all) to add commands.`, 'comment');
+            }
+            this._pendingConfirm = null;
+          };
+          break;
+        }
+        const session = carousel.saveSession(args.name, { history: this.history, log: this.log });
         this.linkedSessionId = session.id;
         this._updateTitle(session.name);
         this._print(` ✓ Session saved: ${session.name}`, 'success');
@@ -937,45 +958,80 @@ class ArivuTerminal {
         break;
       }
 
-      case 'load_session': {
+      case 'session_load': {
         const carousel = window.terminalCarousel;
-        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); return; }
+        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
         const session = carousel.getSession(args.name);
         if (!session) {
           this._print(` ✗ Session not found: "${args.name}"`, 'error');
           const names = carousel.sessions.map(s => s.name).slice(0, 5);
           if (names.length) this._print(`   Available: ${names.join(', ')}`, 'comment');
-          return;
+          break;
         }
-        // Load session data into this terminal + link for auto-save
-        this.history = session.commands || [];
-        this.log = session.log || [];
-        this.historyIndex = this.history.length;
-        this.linkedSessionId = session.id;
-        this._updateTitle(session.name);
-        // Restore annotations
+
+        const mode = args.mode || 'new';
+
+        if (mode === 'replace') {
+          // Clear current terminal, load everything
+          this.outputEl.innerHTML = '';
+          this.history = session.commands || [];
+          this.log = session.log || [];
+          this.historyIndex = this.history.length;
+          this.linkedSessionId = session.id;
+          this._updateTitle(session.name);
+          // Replay all commands to rebuild output
+          for (const cmd of this.history) {
+            const first = cmd.trim().split(/\s+/)[0].toLowerCase();
+            if (SCRIPT_META_COMMANDS.has(first) || cmd.startsWith('#')) continue;
+            const result = this.parser.parse(cmd);
+            if (result.command && !result.error) {
+              this._printRaw(`<span class="term-comment">arivu$</span> ${this.parser.highlight(cmd)}`);
+              try { this._executeCommand(result); } catch {}
+            }
+          }
+          this._print('');
+          this._print(` ✓ Session loaded (replace): ${session.name}`, 'success');
+          this._print(`   ${session.totalCommands} commands replayed`, 'info');
+
+        } else if (mode === 'continue') {
+          // Append session commands to current terminal
+          const prevCount = this.history.length;
+          this.history.push(...(session.commands || []));
+          this.log.push(...(session.log || []));
+          this.historyIndex = this.history.length;
+          this.linkedSessionId = session.id;
+          this._print(` ✓ Session loaded (continue): ${session.name}`, 'success');
+          this._print(`   ${(session.commands || []).length} commands added to current terminal`, 'info');
+
+        } else {
+          // mode === 'new' — open in new terminal window (via carousel)
+          carousel._openSession(session);
+          this._print(` ✓ Session "${session.name}" opened in new terminal`, 'success');
+          break;
+        }
+
+        // Restore annotations (for replace and continue modes)
         if (session.annotations && Object.keys(session.annotations).length) {
           const graphId = window._arivuGraph?.metadata?.graph_id || 'default';
-          sessionStorage.setItem(`athena_annotations_${graphId}`, JSON.stringify(session.annotations));
+          const existing = JSON.parse(sessionStorage.getItem(`athena_annotations_${graphId}`) || '{}');
+          const merged = { ...existing, ...session.annotations };
+          sessionStorage.setItem(`athena_annotations_${graphId}`, JSON.stringify(merged));
           if (window._arivuGraph?.restoreAnnotations) window._arivuGraph.restoreAnnotations();
         }
-        this._print(` ✓ Loaded: ${session.name}`, 'success');
-        this._print(`   ${session.totalCommands} commands, ${session.annotationCount} annotations`, 'info');
         session.lastActive = new Date().toISOString();
         carousel._saveSessions();
         break;
       }
 
-      case 'sessions': {
+      case 'session_list': {
         const carousel = window.terminalCarousel;
         if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
         carousel._loadSessions();
-        const sessions = carousel.sessions;
+        const sessions = carousel.sessions.filter(s => !s._isActive);
         if (!sessions.length) {
-          this._print(` No saved sessions. Use: save session "<name>"`, 'comment');
+          this._print(` No saved sessions. Use: session save "<name>"`, 'comment');
           break;
         }
-        // Show ASCII table
         this._print(` ${sessions.length} saved session${sessions.length > 1 ? 's' : ''}:`, 'info');
         this._printRaw(`   <span class="term-comment">#   Name                    Date       Cmds   Status</span>`);
         this._printRaw(`   <span class="term-comment">${'─'.repeat(55)}</span>`);
@@ -987,38 +1043,32 @@ class ArivuTerminal {
           this._printRaw(`   ${String(i + 1).padEnd(4)}${name}  ${date.padEnd(10)} ${String(s.totalCommands || 0).padEnd(6)} ${status}`);
         });
         this._print('');
-        this._print(' Tip: "sessions" opens carousel. "load session <name>" to restore.', 'comment');
-        // Also open carousel after brief delay
+        this._print(' Tip: session load("<name>") to restore. session load("<name>", replace) to replace current.', 'comment');
         setTimeout(() => carousel.open(), 800);
         break;
       }
 
-      case 'rename_session': {
+      case 'session_rename': {
         const carousel = window.terminalCarousel;
-        // Rename the linked session, or the most recent one
-        if (carousel) {
-          const target = this.linkedSessionId
-            ? carousel.sessions.find(s => s.id === this.linkedSessionId)
-            : carousel.sessions[0];
-          if (target) {
-            const oldName = target.name;
-            carousel.renameSession(target.id, args.name);
-            this._updateTitle(args.name);
-            this._print(` ✓ Renamed: "${oldName}" → "${args.name}"`, 'success');
-          } else {
-            this._print(` ✗ No sessions to rename. Save first with: save session "<name>"`, 'error');
-          }
+        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
+        const target = carousel.getSession(args.oldName);
+        if (!target) {
+          this._print(` ✗ Session not found: "${args.oldName}"`, 'error');
+          break;
         }
+        carousel.renameSession(target.id, args.newName);
+        if (this.linkedSessionId === target.id) this._updateTitle(args.newName);
+        this._print(` ✓ Renamed: "${target.name}" → "${args.newName}"`, 'success');
         break;
       }
 
-      case 'delete_session': {
+      case 'session_delete': {
         const carousel = window.terminalCarousel;
-        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); return; }
+        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
         const session = carousel.getSession(args.name);
         if (!session) {
           this._print(` ✗ Session not found: "${args.name}"`, 'error');
-          return;
+          break;
         }
         this._print(` ⚠ Delete "${session.name}"? This cannot be undone.`, 'warning');
         // Set up a one-time confirmation handler
@@ -1033,6 +1083,43 @@ class ArivuTerminal {
           }
           this._pendingConfirm = null;
         };
+        break;
+      }
+
+      case 'session_append': {
+        const carousel = window.terminalCarousel;
+        if (!carousel) { this._print(` ✗ Session manager not available`, 'error'); break; }
+        const target = carousel.getSession(args.name);
+        if (!target) { this._print(` ✗ Session not found: "${args.name}"`, 'error'); break; }
+
+        const sel = args.selector;
+        const { kept } = this._filterHistory();
+        let toAppend = [];
+
+        if (sel.type === 'all') {
+          if (!kept.length) { this._print(` ✗ No executable commands in history to append`, 'error'); break; }
+          toAppend = kept;
+        } else if (sel.type === 'single') {
+          if (sel.index < 1 || sel.index > kept.length) {
+            this._print(` ✗ Command ${sel.index} doesn't exist (history has ${kept.length} executable commands)`, 'error'); break;
+          }
+          toAppend = [kept[sel.index - 1]];
+        } else if (sel.type === 'range') {
+          if (sel.end < sel.start) { this._print(` ✗ Range end must be > start`, 'error'); break; }
+          if (sel.start < 1) { this._print(` ✗ Range start must be ≥ 1`, 'error'); break; }
+          if (sel.end > kept.length) { this._print(` ✗ Range end ${sel.end} exceeds history (${kept.length} commands)`, 'error'); break; }
+          toAppend = kept.slice(sel.start - 1, sel.end);
+        }
+
+        if (!toAppend.length) { this._print(` ✗ Nothing to append`, 'error'); break; }
+
+        // Append to session
+        target.commands = [...(target.commands || []), ...toAppend];
+        target.totalCommands = target.commands.length;
+        target.lastActive = new Date().toISOString();
+        carousel._saveSessions();
+        this._print(` ✓ Appended ${toAppend.length} command${toAppend.length !== 1 ? 's' : ''} to "${target.name}"`, 'success');
+        this._print(`   Session now has ${target.totalCommands} commands total`, 'info');
         break;
       }
 
