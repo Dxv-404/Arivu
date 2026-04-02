@@ -238,10 +238,10 @@ class ArivuTerminal {
         this._hideAC();
         const input = this.inputEl.value;
         if (input.trim()) {
-          const wasPendingConfirm = !!this._pendingConfirm;
+          const wasSpecialMode = !!this._pendingConfirm || !!this._sequenceState;
           this._execute(input);
-          // Don't push y/n confirmation responses to history
-          if (!wasPendingConfirm) {
+          // Don't push y/n or sequence mode inputs to history
+          if (!wasSpecialMode) {
             this.history.push(input);
             this.historyIndex = this.history.length;
           }
@@ -392,6 +392,13 @@ class ArivuTerminal {
   // ── Command Execution ─────────────────────────────────────────────────
 
   _execute(input) {
+    // Handle sequence mode (script run as sequence)
+    if (this._sequenceState) {
+      this._printRaw(`<span class="term-seq-prompt">seq&gt;</span> ${this.parser._esc(input)}`, 'cmd');
+      this._sequenceState.handle(input);
+      return;
+    }
+
     // Handle pending confirmation (e.g., delete y/n)
     if (this._pendingConfirm) {
       this._printRaw(`<span class="term-prompt-text">&gt;</span> ${this.parser._esc(input)}`, 'cmd');
@@ -825,7 +832,18 @@ class ArivuTerminal {
           break;
         }
         storage.recordRun(script.name);
-        this._runScript(script);
+
+        // Determine run mode
+        const flags = args.flags || [];
+        const hasSlow = flags.includes('--slow');
+        const hasVerbose = flags.includes('--verbose');
+
+        if (args.asSequence) {
+          this._runSequence(script, hasVerbose);
+        } else {
+          const delay = hasSlow ? 500 : hasVerbose ? -1 : 10; // -1 = typewriter
+          this._runScript(script, delay);
+        }
         break;
       }
 
@@ -844,6 +862,60 @@ class ArivuTerminal {
         }).catch(() => {
           this._print(` ✗ Failed to copy to clipboard`, 'error');
         });
+        break;
+      }
+
+      case 'script_append': {
+        const storage = window.arivuScriptStorage;
+        if (!storage) { this._print(` ✗ Script storage not available`, 'error'); break; }
+        const target = storage.get(args.name);
+        if (!target) { this._print(` ✗ Script not found: "${args.name}"`, 'error'); break; }
+
+        const sel = args.selector;
+        let toAppend = [];
+
+        if (sel.type === 'all') {
+          const { kept } = this._filterHistory();
+          if (!kept.length) { this._print(` ✗ No executable commands in history to append`, 'error'); break; }
+          toAppend = kept;
+        } else if (sel.type === 'single') {
+          const { kept } = this._filterHistory();
+          if (sel.index < 1 || sel.index > kept.length) {
+            this._print(` ✗ Command ${sel.index} doesn't exist (history has ${kept.length} executable commands)`, 'error'); break;
+          }
+          toAppend = [kept[sel.index - 1]];
+        } else if (sel.type === 'range') {
+          if (sel.end < sel.start) { this._print(` ✗ Range end must be > start: [${sel.start}-${sel.end}]`, 'error'); break; }
+          const { kept } = this._filterHistory();
+          if (sel.end > kept.length) { this._print(` ✗ Range end ${sel.end} exceeds history (${kept.length} commands)`, 'error'); break; }
+          if (sel.start < 1) { this._print(` ✗ Range start must be ≥ 1`, 'error'); break; }
+          toAppend = kept.slice(sel.start - 1, sel.end);
+        } else if (sel.type === 'from_all' || sel.type === 'from_single' || sel.type === 'from_range') {
+          const source = storage.get(sel.source);
+          if (!source) { this._print(` ✗ Source script not found: "${sel.source}"`, 'error'); break; }
+          if (!source.commands?.length) { this._print(` ✗ Source script "${sel.source}" has no commands`, 'error'); break; }
+          if (sel.type === 'from_all') {
+            toAppend = [...source.commands];
+          } else if (sel.type === 'from_single') {
+            if (sel.index < 1 || sel.index > source.commands.length) {
+              this._print(` ✗ Command ${sel.index} doesn't exist in "${sel.source}" (${source.commands.length} commands)`, 'error'); break;
+            }
+            toAppend = [source.commands[sel.index - 1]];
+          } else {
+            if (sel.end < sel.start) { this._print(` ✗ Range end must be > start`, 'error'); break; }
+            if (sel.end > source.commands.length) { this._print(` ✗ Range end exceeds source (${source.commands.length} commands)`, 'error'); break; }
+            if (sel.start < 1) { this._print(` ✗ Range start must be ≥ 1`, 'error'); break; }
+            toAppend = source.commands.slice(sel.start - 1, sel.end);
+          }
+        }
+
+        if (!toAppend.length) { this._print(` ✗ Nothing to append`, 'error'); break; }
+
+        // Append to target script
+        const newCommands = [...target.commands, ...toAppend];
+        storage.save(target.name, newCommands, { description: target.description });
+        this._print(` ✓ Appended ${toAppend.length} command${toAppend.length !== 1 ? 's' : ''} to "${target.name}"`, 'success');
+        this._print(`   Script now has ${newCommands.length} commands total`, 'info');
         break;
       }
 
@@ -1277,11 +1349,12 @@ class ArivuTerminal {
   }
 
   /**
-   * Run a script: execute each command in sequence with visual feedback.
-   * Uses requestAnimationFrame pacing for smooth output.
+   * Run a script with configurable speed.
+   * @param {object} script - Script object with .commands array
+   * @param {number} delay - ms between commands. 10=batch, 500=slow, -1=typewriter
    */
-  _runScript(script) {
-    // Recursion guard — prevent script from running itself
+  _runScript(script, delay = 10) {
+    // Recursion guard
     if (!this._runningScripts) this._runningScripts = new Set();
     const scriptKey = (script.name || script.id || '').toLowerCase();
     if (this._runningScripts.has(scriptKey)) {
@@ -1291,17 +1364,28 @@ class ArivuTerminal {
     this._runningScripts.add(scriptKey);
 
     const cmds = script.commands || [];
-    this._print(`┌─ Running: ${script.name} (${cmds.length} commands) ────────`, 'info');
+    const modeLabel = delay === -1 ? 'verbose' : delay >= 500 ? 'slow' : 'batch';
+    this._print(`┌─ Running: ${script.name} (${cmds.length} commands) [${modeLabel}] ────`, 'info');
     this._print(`│`, 'comment');
 
     let idx = 0;
     let successes = 0;
     let errors = 0;
     const startTime = Date.now();
+    const isVerbose = delay === -1;
+
+    const executeCmd = (cmd) => {
+      const result = this.parser.parse(cmd);
+      this.log.push({ timestamp: new Date().toISOString(), command: cmd, status: result.error ? 'error' : 'success', parsed: result.command });
+      if (result.error) { this._print(`│   ✗ ${result.error}`, 'error'); errors++; return; }
+      if (result.command) {
+        try { this._executeCommand(result); successes++; }
+        catch (err) { this._print(`│   ✗ ${err.message}`, 'error'); errors++; }
+      }
+    };
 
     const runNext = () => {
       if (idx >= cmds.length) {
-        // Done — clear recursion guard
         this._runningScripts?.delete(scriptKey);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this._print(`│`, 'comment');
@@ -1312,48 +1396,152 @@ class ArivuTerminal {
       const cmd = cmds[idx];
       idx++;
 
-      // Skip blank lines and comments
-      if (!cmd.trim() || cmd.trim().startsWith('#')) {
-        setTimeout(runNext, 0);
-        return;
-      }
+      if (!cmd.trim() || cmd.trim().startsWith('#')) { setTimeout(runNext, 0); return; }
 
-      // Show the command
       this._printRaw(`│ <span class="term-comment">[${idx}/${cmds.length}]</span> ${this.parser.highlight(cmd)}`);
 
-      // Parse and execute
-      const result = this.parser.parse(cmd);
-      this.log.push({
-        timestamp: new Date().toISOString(),
-        command: cmd,
-        status: result.error ? 'error' : 'success',
-        parsed: result.command,
-      });
+      if (isVerbose) {
+        // Typewriter mode: type the command character by character, then execute
+        this.typeAndExecute(cmd).then(() => {
+          successes++; // typeAndExecute calls _execute which handles the rest
+          setTimeout(runNext, 200);
+        });
+      } else {
+        executeCmd(cmd);
+        setTimeout(runNext, Math.max(0, delay));
+      }
+    };
 
-      if (result.error) {
-        this._print(`│   ✗ ${result.error}`, 'error');
-        errors++;
-        setTimeout(runNext, 10);
+    setTimeout(runNext, 50);
+  }
+
+  /**
+   * Run a script in SEQUENCE mode — one command at a time, user presses Enter.
+   * @param {object} script - Script object
+   * @param {boolean} verbose - If true, typewriter-animate each command
+   */
+  _runSequence(script, verbose = false) {
+    // Recursion guard
+    if (!this._runningScripts) this._runningScripts = new Set();
+    const scriptKey = (script.name || script.id || '').toLowerCase();
+    if (this._runningScripts.has(scriptKey)) {
+      this._print(` ✗ Recursive script detected: "${script.name}" is already running`, 'error');
+      return;
+    }
+    this._runningScripts.add(scriptKey);
+
+    const cmds = (script.commands || []).filter(c => c.trim() && !c.trim().startsWith('#'));
+    if (!cmds.length) { this._print(` ✗ Script has no executable commands`, 'error'); return; }
+
+    let idx = 0;
+    let successes = 0;
+    let errors = 0;
+    let skipped = 0;
+    const startTime = Date.now();
+
+    this._print(`┌─ Running: ${script.name} (${cmds.length} commands) [sequence] ────`, 'info');
+    this._print(`│`, 'comment');
+
+    // Save original prompt
+    const origPrompt = this.el.querySelector('.term-prompt-text')?.textContent || 'arivu$';
+
+    const showNextCmd = () => {
+      if (idx >= cmds.length) {
+        // Done
+        this._runningScripts?.delete(scriptKey);
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        this._print(`│`, 'comment');
+        this._print(`└─ Complete: ${successes} executed, ${skipped} skipped, ${errors} errors (${elapsed}s)`,
+          errors === 0 ? 'success' : 'warning');
+        // Restore prompt
+        const promptEl = this.el.querySelector('.term-prompt-text');
+        if (promptEl) promptEl.textContent = origPrompt;
+        this._sequenceState = null;
         return;
       }
 
-      if (result.command) {
-        try {
-          this._executeCommand(result);
-          successes++;
-        } catch (err) {
-          this._print(`│   ✗ ${err.message}`, 'error');
-          errors++;
-        }
-      }
+      // Update prompt
+      const promptEl = this.el.querySelector('.term-prompt-text');
+      if (promptEl) promptEl.textContent = `seq:${script.name.substring(0, 12)}[${idx + 1}/${cmds.length}]>`;
 
-      // Batch mode: minimal delay for DOM rendering (fast summary)
-      // Phase 2 --verbose flag will use 150ms+ for typewriter mode
-      setTimeout(runNext, 10);
+      // Show upcoming command
+      this._printRaw(`│ <span class="term-seq-prompt">▸</span> ${this.parser.highlight(cmds[idx])}`);
+      this._print(`│   Enter=next · skip · stop · peek · goto N · restart`, 'comment');
     };
 
-    // Start with a brief delay
-    setTimeout(runNext, 50);
+    // Sequence state handler — intercepts Enter key
+    this._sequenceState = {
+      handle: (input) => {
+        const inp = input.trim().toLowerCase();
+
+        if (inp === '' || inp === 'next') {
+          // Execute current command
+          const cmd = cmds[idx];
+          const result = this.parser.parse(cmd);
+          this.log.push({ timestamp: new Date().toISOString(), command: cmd, status: result.error ? 'error' : 'success', parsed: result.command });
+          if (result.error) { this._print(`│   ✗ ${result.error}`, 'error'); errors++; }
+          else if (result.command) {
+            try { this._executeCommand(result); successes++; }
+            catch (e) { this._print(`│   ✗ ${e.message}`, 'error'); errors++; }
+          }
+          idx++;
+          showNextCmd();
+
+        } else if (inp === 'skip') {
+          this._print(`│ ⏭ [${idx + 1}] ${cmds[idx]?.substring(0, 40)} — skipped`, 'comment');
+          skipped++; idx++;
+          showNextCmd();
+
+        } else if (inp.startsWith('skip ')) {
+          const n = parseInt(inp.split(' ')[1]);
+          if (isNaN(n) || n < 1) { this._print(`│   ✗ Usage: skip N`, 'error'); return; }
+          for (let s = 0; s < n && idx < cmds.length; s++) {
+            this._print(`│ ⏭ [${idx + 1}] ${cmds[idx]?.substring(0, 40)} — skipped`, 'comment');
+            skipped++; idx++;
+          }
+          showNextCmd();
+
+        } else if (inp === 'stop') {
+          this._print(`│`, 'comment');
+          this._print(`│ Stopped at ${idx + 1}/${cmds.length}. ${successes} executed, ${skipped} skipped, ${cmds.length - idx} remaining.`, 'warning');
+          this._runningScripts?.delete(scriptKey);
+          const promptEl = this.el.querySelector('.term-prompt-text');
+          if (promptEl) promptEl.textContent = origPrompt;
+          this._sequenceState = null;
+
+        } else if (inp === 'peek') {
+          const upcoming = cmds.slice(idx, idx + 3);
+          this._print(`│ ▸ Upcoming:`, 'info');
+          upcoming.forEach((c, i) => {
+            this._printRaw(`│   [${idx + i + 1}] ${this.parser.highlight(c.substring(0, 40))}`);
+          });
+
+        } else if (inp.startsWith('goto ')) {
+          const target = parseInt(inp.split(' ')[1]);
+          if (isNaN(target) || target < 1 || target > cmds.length) {
+            this._print(`│   ✗ Invalid. goto N where N is 1-${cmds.length}`, 'error'); return;
+          }
+          if (target <= idx + 1) {
+            this._print(`│   ✗ Can only go forward. Use 'restart' to go back.`, 'error'); return;
+          }
+          while (idx < target - 1) {
+            this._print(`│ ⏭ [${idx + 1}] skipped`, 'comment');
+            skipped++; idx++;
+          }
+          showNextCmd();
+
+        } else if (inp === 'restart') {
+          idx = 0; successes = 0; errors = 0; skipped = 0;
+          this._print(`│ ↺ Restarting from command 1`, 'info');
+          showNextCmd();
+
+        } else {
+          this._print(`│   ✗ In sequence mode. Use: Enter, skip, stop, peek, goto N, restart`, 'error');
+        }
+      }
+    };
+
+    showNextCmd();
   }
 
   // ── Filter Helper: shows what gets kept/removed before saving ──────────

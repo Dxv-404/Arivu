@@ -490,6 +490,7 @@ class TerminalSessionCarousel {
         </div>
         <div class="detail-actions">
           <button class="detail-btn detail-btn--open">Open</button>
+          <button class="detail-btn detail-btn--quickload">⚡ Quick Load</button>
           <button class="detail-btn detail-btn--replay">▶ Replay</button>
           <button class="detail-btn detail-btn--export">↓ Export</button>
           <button class="detail-btn detail-btn--delete">✕ Delete</button>
@@ -506,6 +507,11 @@ class TerminalSessionCarousel {
     overlay.querySelector('.detail-btn--open').addEventListener('click', () => {
       overlay.remove();
       this._openSession(session);
+    });
+
+    overlay.querySelector('.detail-btn--quickload')?.addEventListener('click', () => {
+      overlay.remove();
+      this._quickLoadSession(session);
     });
 
     overlay.querySelector('.detail-btn--replay').addEventListener('click', () => {
@@ -617,6 +623,48 @@ class TerminalSessionCarousel {
     term._print('');
 
     // Update last active
+    session.lastActive = new Date().toISOString();
+    this._saveSessions();
+  }
+
+  _quickLoadSession(session) {
+    this.close();
+    const tm = window.terminalManager;
+    if (!tm) return;
+
+    // Restore annotations first
+    if (session.annotations && Object.keys(session.annotations).length) {
+      const graphId = window._arivuGraph?.metadata?.graph_id || 'default';
+      sessionStorage.setItem(`athena_annotations_${graphId}`, JSON.stringify(session.annotations));
+      if (window._arivuGraph?.restoreAnnotations) window._arivuGraph.restoreAnnotations();
+    }
+
+    const term = tm.create();
+    term.history = session.commands || [];
+    term.log = session.log || [];
+    term.linkedSessionId = session.id;
+    term._updateTitle(session.name);
+
+    // Fast replay — execute commands to rebuild output (no typewriter)
+    term._print(` ⚡ Quick loading: ${session.name}`, 'info');
+    const cmds = session.commands || [];
+    const replayCmds = cmds.slice(-30); // last 30 for output rebuild
+    for (const cmd of replayCmds) {
+      const first = cmd.trim().split(/\s+/)[0].toLowerCase();
+      // Skip meta commands during replay
+      const metaFilter = new Set(['save', 'load', 'sessions', 'help', 'history', 'export', 'clear', 'exit', 'rename', 'delete', 'scripts', 'run', 'script', 'session']);
+      if (metaFilter.has(first) || cmd.startsWith('#')) continue;
+      const result = term.parser.parse(cmd);
+      if (result.command && !result.error) {
+        try {
+          term._printRaw(`<span class="term-comment">arivu$</span> ${term.parser.highlight(cmd)}`);
+          term._executeCommand(result);
+        } catch {}
+      }
+    }
+    term._print('');
+    term._print(` ✓ Loaded: ${session.name} (${cmds.length} commands, last ${replayCmds.length} replayed)`, 'success');
+
     session.lastActive = new Date().toISOString();
     this._saveSessions();
   }

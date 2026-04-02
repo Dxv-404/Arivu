@@ -115,19 +115,21 @@ class ArivuTerminalParser {
       }
       case 'script': return this._parseScript(rest, raw);
       case 'run': {
-        // Separate script name from flags (--verbose, --dry, etc.)
-        // Script name is everything before the first --flag token
+        // Separate name, flags, and "as sequence"
         let nameTokens = [];
         let flags = [];
-        for (const t of rest) {
-          if (t.startsWith('--')) { flags.push(t); }
-          else if (flags.length === 0) { nameTokens.push(t); }
-          else { flags.push(t); } // flag value like --top 5
+        let asSequence = false;
+        for (let ri = 0; ri < rest.length; ri++) {
+          const t = rest[ri];
+          if (t.toLowerCase() === 'as' && rest[ri + 1]?.toLowerCase() === 'sequence') {
+            asSequence = true; ri++;
+          } else if (t.startsWith('--')) { flags.push(t); }
+          else if (flags.length === 0 && !asSequence) { nameTokens.push(t); }
+          else { flags.push(t); }
         }
         const scriptName = nameTokens.join(' ').replace(/^["']|["']$/g, '');
-        if (!scriptName) return { command: null, args: {}, raw, error: 'Usage: run "<script-name>" [--verbose] [--dry] [--top N]' };
-        // Phase 2: flags will be parsed and applied. For now, store raw.
-        return { command: 'script_run', args: { name: scriptName, flags }, error: null, raw };
+        if (!scriptName) return { command: null, args: {}, raw, error: 'Usage: run "<name>" [--slow|--verbose|as sequence]' };
+        return { command: 'script_run', args: { name: scriptName, flags, asSequence }, error: null, raw };
       }
       case 'scripts': return { command: 'script_list', args: {}, error: null, raw };
       case 'delete': {
@@ -192,26 +194,115 @@ class ArivuTerminalParser {
         return { command: 'script_copy', args: { name: srcName, newName }, error: null, raw };
       }
       case 'run': {
-        // Separate script name from flags (--verbose, --dry, etc.)
+        // Separate name from flags and detect "as sequence"
         let nameTokens = [];
         let flags = [];
-        for (const t of rest) {
-          if (t.startsWith('--')) { flags.push(t); }
-          else if (flags.length === 0) { nameTokens.push(t); }
-          else { flags.push(t); }
+        let asSequence = false;
+        for (let ti = 0; ti < rest.length; ti++) {
+          const t = rest[ti];
+          if (t.toLowerCase() === 'as' && rest[ti + 1]?.toLowerCase() === 'sequence') {
+            asSequence = true;
+            ti++; // skip 'sequence'
+          } else if (t.startsWith('--')) {
+            flags.push(t);
+          } else if (flags.length === 0 && !asSequence) {
+            nameTokens.push(t);
+          } else {
+            flags.push(t); // flag values like --top 5
+          }
         }
         const name = nameTokens.join(' ').replace(/^["']|["']$/g, '');
-        if (!name) return { command: null, args: {}, raw, error: 'Usage: script run "<name>" [--verbose] [--dry] [--top N]' };
-        return { command: 'script_run', args: { name, flags }, error: null, raw };
+        if (!name) return { command: null, args: {}, raw, error: 'Usage: script run "<name>" [--slow|--verbose|as sequence]' };
+        return { command: 'script_run', args: { name, flags, asSequence }, error: null, raw };
       }
       case 'export': {
         const name = rest.join(' ').replace(/^["']|["']$/g, '');
         if (!name) return { command: null, args: {}, raw, error: 'Usage: script export "<name>"' };
         return { command: 'script_export', args: { name }, error: null, raw };
       }
+      case 'append': {
+        // script append("name", selector)
+        // selector: all | N | [N-M] | from: "source" | from: "source", N | from: "source", [N-M]
+        const bracketResult = this._extractBracketArgs(rest);
+        if (bracketResult.error) return { command: null, args: {}, raw, error: bracketResult.error };
+        const bArgs = bracketResult.args;
+        if (!bArgs.length) return { command: null, args: {}, raw, error: 'Usage: script append("<name>", all|N|[N-M])' };
+
+        const targetName = bArgs[0];
+        if (!targetName) return { command: null, args: {}, raw, error: 'Missing script name' };
+
+        // Parse the selector (2nd+ args)
+        const selectorRaw = bArgs.slice(1).join(', ');
+        let selector = { type: 'all' };
+
+        if (bArgs.length < 2 || bArgs[1]?.toLowerCase() === 'all') {
+          selector = { type: 'all' };
+        } else if (bArgs[1]?.toLowerCase().startsWith('from:')) {
+          // from: "source" or from: "source", N or from: "source", [N-M]
+          const sourceRaw = bArgs[1].replace(/^from:\s*/i, '').replace(/^["']|["']$/g, '');
+          const thirdArg = bArgs[2];
+          if (!sourceRaw) return { command: null, args: {}, raw, error: 'Missing source script name after from:' };
+          if (!thirdArg) {
+            selector = { type: 'from_all', source: sourceRaw };
+          } else {
+            const rangeMatch = thirdArg.match(/^\[(\d+)-(\d+)\]$/);
+            if (rangeMatch) {
+              selector = { type: 'from_range', source: sourceRaw, start: parseInt(rangeMatch[1]), end: parseInt(rangeMatch[2]) };
+            } else if (/^\d+$/.test(thirdArg)) {
+              selector = { type: 'from_single', source: sourceRaw, index: parseInt(thirdArg) };
+            } else {
+              return { command: null, args: {}, raw, error: `Invalid selector: '${thirdArg}'. Use: N, [N-M], or all` };
+            }
+          }
+        } else {
+          // N or [N-M]
+          const sel = bArgs[1];
+          const rangeMatch = sel.match(/^\[(\d+)-(\d+)\]$/);
+          if (rangeMatch) {
+            selector = { type: 'range', start: parseInt(rangeMatch[1]), end: parseInt(rangeMatch[2]) };
+          } else if (/^\d+$/.test(sel)) {
+            selector = { type: 'single', index: parseInt(sel) };
+          } else {
+            return { command: null, args: {}, raw, error: `Invalid selector: '${sel}'. Use: all, N, [N-M], or from: "<script>"` };
+          }
+        }
+
+        return { command: 'script_append', args: { name: targetName, selector }, error: null, raw };
+      }
       default:
-        return { command: null, args: {}, raw, error: `Unknown script subcommand: '${sub}'. Options: save, list, info, delete, copy, run, export` };
+        return { command: null, args: {}, raw, error: `Unknown script subcommand: '${sub}'. Options: save, list, info, delete, copy, run, export, append` };
     }
+  }
+
+  /**
+   * Extract arguments from bracket syntax: append("name", selector)
+   * Input: remaining tokens after the subcommand, e.g., ['("name",', '5)']
+   * Returns: { args: ["name", "5"], error: null } or { args: null, error: "..." }
+   */
+  _extractBracketArgs(tokens) {
+    const joined = tokens.join(' ');
+    // Match: (...content...)
+    const match = joined.match(/^\((.+)\)$/);
+    if (!match) {
+      // Try partial: maybe user typed "name", 5) without opening paren
+      return { args: null, error: 'Expected (...). Usage: command("name", selector)' };
+    }
+    // Split by comma, respecting quotes
+    const inner = match[1];
+    const args = [];
+    let current = '';
+    let inQuote = false;
+    let quoteChar = '';
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if ((ch === '"' || ch === "'") && !inQuote) { inQuote = true; quoteChar = ch; current += ch; }
+      else if (ch === quoteChar && inQuote) { inQuote = false; current += ch; }
+      else if (ch === ',' && !inQuote) { args.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+    if (current.trim()) args.push(current.trim());
+    // Strip quotes from each arg
+    return { args: args.map(a => a.replace(/^["']|["']$/g, '')), error: null };
   }
 
   _parseAnnotate(tokens, raw) {
