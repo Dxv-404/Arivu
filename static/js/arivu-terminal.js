@@ -1436,6 +1436,11 @@ class ArivuTerminal {
     } catch {}
 
     carousel._saveSessions();
+
+    // Also auto-save pinned terminal state
+    if (this._isPinned && window.terminalGrid) {
+      window.terminalGrid._savePinnedTerminal(this);
+    }
   }
 
   /**

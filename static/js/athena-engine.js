@@ -2377,9 +2377,9 @@ class SlashCommandRegistry {
         window.terminalManager.create();
         // Refocus Athena input after terminal steals focus
         setTimeout(() => {
-          const athenaInput = document.querySelector('.athena-input-field, #athena-input, .chat-input textarea');
+          const athenaInput = document.querySelector('.athena-textarea');
           if (athenaInput) athenaInput.focus();
-        }, 100);
+        }, 150);
       }
     } else {
       const argStr = args ? ` ${args.join(' ')}` : '';
