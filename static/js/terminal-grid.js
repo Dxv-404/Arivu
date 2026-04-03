@@ -311,7 +311,7 @@ class TerminalGridManager {
         const tm = window.terminalManager;
         const term = tm?.terminals[cardId];
         if (term) {
-          if (term.el?.classList.contains('minimized')) {
+          if (term._isMinimizedToGrid || term.el?.style.display === 'none') {
             this._genieMaximize(term, card);
           } else {
             term.focus();
@@ -477,13 +477,23 @@ class TerminalGridManager {
 
     switch (action) {
       case 'open':
-        if (term) { term.focus(); if (term.el?.classList.contains('minimized')) term.toggleMinimize(); }
-        else this._restorePinnedTerminal(cardId);
+        if (term) {
+          if (term._isMinimizedToGrid || term.el?.style.display === 'none') {
+            this._genieMaximize(term, null);
+          } else {
+            term.focus();
+          }
+        } else {
+          this._restorePinnedTerminal(cardId);
+        }
         this.closeGrid();
         break;
 
       case 'pin':
-        if (term) { term._isPinned = true; this._savePinnedTerminal(term); }
+        if (term) {
+          term._isPinned = true;
+          this._savePinnedTerminal(term);
+        }
         this._rebuildGrid();
         break;
 
