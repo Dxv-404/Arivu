@@ -1848,15 +1848,20 @@ class ArivuTerminal {
   }
 
   toggleMinimize() {
-    if (this.el.classList.contains('minimized')) {
-      // Unminimize — just remove the class (genie maximize handled by grid)
-      this.el.classList.remove('minimized');
+    if (this._isMinimizedToGrid) {
+      // Restore from grid — use genie maximize
+      if (window.terminalGrid) {
+        window.terminalGrid._genieMaximize(this, null);
+      } else {
+        this.el.style.display = '';
+        this._isMinimizedToGrid = false;
+      }
     } else {
       // Minimize — use genie warp if grid manager exists
       if (window.terminalGrid) {
         window.terminalGrid.genieMinimize(this);
       } else {
-        this.el.classList.add('minimized');
+        this.el.classList.toggle('minimized');
       }
     }
   }
