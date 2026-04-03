@@ -21,9 +21,16 @@ class TerminalGridManager {
     this.iconMode = localStorage.getItem('arivu_grid_icon_mode') === 'true';
     this.cardOrder = []; // ordered terminal IDs for rearrangement
     this.contextMenuEl = null;
+    this._lastKnownGraphId = localStorage.getItem('arivu_last_graph_id') || null;
 
     this._createPill();
     this._attachGlobalEvents();
+
+    // Check for pinned terminals on load (after short delay for graph to be available)
+    setTimeout(() => {
+      this.onGraphReady();
+      this.updatePill();
+    }, 2000);
   }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -68,9 +75,11 @@ class TerminalGridManager {
     const tm = window.terminalManager;
     if (!tm) return;
 
-    const count = Object.keys(tm.terminals).length + this._getPinnedCount();
-    const minimizedCount = this._getMinimizedIds().length;
-    const totalVisible = count;
+    // Count active terminals (including minimized-to-grid ones)
+    const activeCount = Object.keys(tm.terminals).length;
+    // Count pinned terminals NOT currently active (unrestored pins only)
+    const unretoredPinCount = this._getPinnedCount();
+    const totalVisible = activeCount + unretoredPinCount;
 
     if (totalVisible === 0) {
       // No terminals — hide pill with reverse typewriter
@@ -604,24 +613,23 @@ class TerminalGridManager {
   genieMinimize(term) {
     if (!term?.el) return;
 
-    // Ensure grid is briefly visible
-    const wasOpen = this.isGridOpen;
-    if (!wasOpen) this.openGrid();
-
-    const termRect = term.el.getBoundingClientRect();
-
     // Apply warp animation
     term.el.style.transformOrigin = 'bottom center';
     term.el.classList.add('term-genie-minimize');
 
     setTimeout(() => {
       term.el.classList.remove('term-genie-minimize');
-      term.el.classList.add('minimized');
-      // Rebuild grid to show the minimized card
-      this._rebuildGrid();
-      // Close grid after brief delay if it wasn't open
-      if (!wasOpen) {
-        setTimeout(() => this.closeGrid(), 600);
+      // HIDE the terminal completely (not just minimized title bar)
+      term.el.style.display = 'none';
+      term._isMinimizedToGrid = true;
+      // Update pill count
+      this.updatePill();
+      // Briefly show grid so user sees the terminal land
+      if (!this.isGridOpen) {
+        this.openGrid();
+        setTimeout(() => this.closeGrid(), 800);
+      } else {
+        this._rebuildGrid();
       }
     }, 400);
   }
@@ -632,12 +640,16 @@ class TerminalGridManager {
   _genieMaximize(term, cardEl) {
     if (!term?.el) return;
 
+    // Restore from hidden
+    term.el.style.display = '';
     term.el.classList.remove('minimized');
+    term._isMinimizedToGrid = false;
     term.el.classList.add('term-genie-maximize');
 
     setTimeout(() => {
       term.el.classList.remove('term-genie-maximize');
       term.focus();
+      this.updatePill();
     }, 400);
   }
 
@@ -646,8 +658,21 @@ class TerminalGridManager {
   // ═════════════════════════════════════════════════════════════════════
 
   _getPinKey() {
-    const graphId = window._arivuGraph?.metadata?.graph_id || 'default';
+    const graphId = window._arivuGraph?.metadata?.graph_id || this._lastKnownGraphId || 'default';
     return `arivu_pinned_terminals_${graphId}`;
+  }
+
+  /**
+   * Called when the graph finishes loading so we can get the real graph ID.
+   * Re-checks pinned terminals with the correct key.
+   */
+  onGraphReady() {
+    const graphId = window._arivuGraph?.metadata?.graph_id;
+    if (graphId && graphId !== this._lastKnownGraphId) {
+      this._lastKnownGraphId = graphId;
+      localStorage.setItem('arivu_last_graph_id', graphId);
+      this.updatePill();
+    }
   }
 
   _getPinnedTerminals() {
@@ -703,7 +728,13 @@ class TerminalGridManager {
     if (!tm) return;
 
     const term = tm.create();
-    term.id = pin.id; // Restore original ID
+    // Re-register under the original pin ID so _getPinnedCount can find it
+    const newId = term.id;
+    delete tm.terminals[newId];
+    term.id = pin.id;
+    term.el.id = pin.id;
+    tm.terminals[pin.id] = term;
+
     term._gridIcon = pin.icon;
     term._isPinned = true;
     term.history = pin.history || [];
@@ -734,6 +765,13 @@ class TerminalGridManager {
   savePinnedState() {
     const tm = window.terminalManager;
     if (!tm) return;
+
+    // Update the last known graph ID before saving
+    const graphId = window._arivuGraph?.metadata?.graph_id;
+    if (graphId) {
+      this._lastKnownGraphId = graphId;
+      localStorage.setItem('arivu_last_graph_id', graphId);
+    }
 
     for (const [id, term] of Object.entries(tm.terminals)) {
       if (term._isPinned) {
