@@ -16,3 +16,15 @@ except ImportError:
 
 # Step 2: Add project root to sys.path so all backend imports resolve
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Step 3: Shared Flask test client fixture for all test files
+import pytest
+
+@pytest.fixture
+def client():
+    """Create a Flask test client. Available to all test files."""
+    from app import create_app
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c

@@ -173,8 +173,8 @@ def add_security_headers(response):
         "script-src 'self' 'unsafe-inline' "
         "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net "
         "https://fonts.googleapis.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://api.fontshare.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.fontshare.com; "
         "connect-src 'self' https://api.semantic-scholar.org wss:; "
         "img-src 'self' data: https:; "
         "frame-ancestors 'none';"
@@ -3732,6 +3732,53 @@ RULES:
 
     # ─── POST /api/flag-edge (Phase 8: auto-downgrade) ──────────────────
 
+    @app.route("/api/edge/<edge_id>/citation")
+    def api_edge_citation(edge_id):
+        """Phase C #020: Citation Sentence Viewer endpoint.
+        Returns citing/cited sentences, mutation type, confidence, and text sources
+        for a specific edge from the edge_analysis table."""
+        from backend.models import get_confidence_tier
+        from backend.db import fetchone
+        row = fetchone(
+            "SELECT citing_sentence, cited_sentence, citing_text_source, "
+            "cited_text_source, mutation_type, mutation_confidence, citation_intent, "
+            "mutation_evidence, similarity_score, comparable, citing_paper_id, cited_paper_id "
+            "FROM edge_analysis WHERE edge_id=%s", (edge_id,))
+        if not row:
+            return jsonify({"error": "Edge not found", "code": "EDGE_NOT_FOUND"}), 404
+
+        # Look up paper titles for display
+        citing_title = ""
+        cited_title = ""
+        citing_row = fetchone("SELECT title, text_tier FROM papers WHERE paper_id=%s", (row['citing_paper_id'],))
+        cited_row = fetchone("SELECT title, text_tier FROM papers WHERE paper_id=%s", (row['cited_paper_id'],))
+        if citing_row:
+            citing_title = citing_row.get('title', '')
+        if cited_row:
+            cited_title = cited_row.get('title', '')
+
+        conf = float(row['mutation_confidence'] or 0)
+        return jsonify({
+            "edge_id": edge_id,
+            "citing_paper_id": row['citing_paper_id'],
+            "cited_paper_id": row['cited_paper_id'],
+            "citing_paper": citing_title,
+            "cited_paper": cited_title,
+            "citing_sentence": row['citing_sentence'],
+            "cited_sentence": row['cited_sentence'],
+            "citing_source": row['citing_text_source'] or 'none',
+            "cited_source": row['cited_text_source'] or 'none',
+            "citing_text_tier": citing_row.get('text_tier', 4) if citing_row else 4,
+            "cited_text_tier": cited_row.get('text_tier', 4) if cited_row else 4,
+            "mutation_type": row['mutation_type'],
+            "confidence": conf,
+            "confidence_tier": get_confidence_tier(conf),
+            "citation_intent": row['citation_intent'],
+            "mutation_evidence": row['mutation_evidence'],
+            "similarity_score": float(row['similarity_score'] or 0),
+            "comparable": bool(row['comparable']),
+        })
+
     @app.route("/api/flag-edge", methods=["POST"])
     @require_session
     def api_flag_edge():
@@ -5554,7 +5601,204 @@ RULES:
         )
         return render_template("journalism.html", paper=dict(paper) if paper else {})
 
-    app.logger.info("Arivu Phase 8 app ready")
+    # ── Athena Block Visual Test Page (dev only) ────────────────────────
+    @app.route("/athena-test")
+    def athena_test_page():
+        return render_template("athena_test.html")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ATHENA CHAT SYSTEM ROUTES (Phase A)
+    # Per ATHENA_PHASE_A.md Section 2.1.1 and 2.1.4
+    # MOVED BEFORE return app (was unreachable after return)
+    # ══════════════════════════════════════════════════════════════════════
+
+    from backend.athena_orchestrator import orchestrator as _athena_orch
+
+    @app.route("/api/athena/send", methods=["POST"])
+    @require_session
+    def athena_send():
+        """POST /api/athena/send - Accept user message, return message_id."""
+        from backend.schemas import AthenaSendRequest
+
+        session_id = g.session_id
+        data = request.json or {}
+
+        # SECURITY: Never accept messages array from client
+        if "messages" in data:
+            return jsonify({"error": "Messages array not accepted"}), 400
+
+        # Validate through Pydantic
+        try:
+            validated = AthenaSendRequest(**(data))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+        message = validated.message
+        graph_id = validated.graph_id
+        thread_id = validated.thread_id
+        awareness = data.get("awareness")
+        mode = data.get("mode", "default")
+
+        message_id = _athena_orch.handle_send(
+            message, graph_id, thread_id, session_id, awareness=awareness, mode=mode
+        )
+
+        # Phase C #109: Log Athena chat action for session history awareness
+        log_action(session_id, "athena_chat", {
+            "message": message[:100],
+            "graph_id": graph_id,
+            "mode": mode,
+        })
+
+        return jsonify({"message_id": message_id})
+
+    @app.route("/api/athena/stream")
+    @require_session
+    def athena_stream():
+        """GET /api/athena/stream - SSE stream for responses."""
+        message_id = request.args.get("message_id")
+        if not message_id:
+            return jsonify({"error": "message_id required"}), 400
+
+        session_id = g.session_id
+
+        def generate():
+            try:
+                for event in _athena_orch.generate_response(message_id, session_id):
+                    yield f"id: {event['id']}\nevent: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+                # Tell EventSource not to reconnect after stream ends
+                yield "retry: 86400000\n\n"
+            except GeneratorExit:
+                logger.info(f"SSE stream closed by client: {message_id}")
+            finally:
+                _athena_orch.finalize_response(message_id, session_id)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+
+    @app.route("/api/athena/history", methods=["GET"])
+    @require_session
+    def athena_history_get():
+        """GET /api/athena/history - Load conversation from DB."""
+        session_id = g.session_id
+        thread_id = request.args.get("thread_id", "main")
+        limit = min(int(request.args.get("limit", "50")), 100)
+
+        rows = db.fetchall(
+            "SELECT role, content, metadata, created_at FROM chat_history "
+            "WHERE session_id = %s AND thread_id = %s "
+            "ORDER BY created_at DESC LIMIT %s",
+            (session_id, thread_id, limit)
+        )
+        messages = []
+        for r in reversed(rows or []):
+            msg = {"role": r["role"], "content": r["content"]}
+            if r.get("metadata"):
+                meta = r["metadata"]
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except Exception:
+                        meta = {}
+                msg["metadata"] = meta
+            if r.get("created_at"):
+                msg["created_at"] = str(r["created_at"])
+            messages.append(msg)
+
+        return jsonify({"messages": messages})
+
+    @app.route("/api/athena/history", methods=["POST"])
+    @require_session
+    def athena_history_store():
+        """POST /api/athena/history - Store single message."""
+        session_id = g.session_id
+        data = request.json or {}
+
+        role = data.get("role")
+        content = data.get("content", "")
+        thread_id = data.get("thread_id", "main")
+        metadata = data.get("metadata", {})
+
+        if role not in ("user", "assistant", "system"):
+            return jsonify({"error": "Invalid role"}), 400
+        if not content:
+            return jsonify({"error": "Content required"}), 400
+
+        db.execute(
+            "INSERT INTO chat_history (session_id, thread_id, role, content, metadata) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (session_id, thread_id, role, content, json.dumps(metadata))
+        )
+        return jsonify({"stored": True})
+
+    @app.route("/api/athena/enrichment")
+    @require_session
+    def athena_enrichment():
+        """GET /api/athena/enrichment - Poll for Gemini async enrichment."""
+        message_id = request.args.get("message_id")
+        if not message_id:
+            return jsonify({"enrichment": None})
+        result = _athena_orch.get_enrichment(message_id)
+        return jsonify({"enrichment": result})
+
+    # B-32: #048 Conversation History Sessions endpoint
+    @app.route("/api/athena/history/sessions")
+    @require_session
+    def athena_history_sessions():
+        """GET /api/athena/history/sessions - List past conversation sessions.
+        Per ATHENA_PHASE_B.md Section 2.1.13."""
+        session_id = g.session_id  # Set by @require_session decorator
+        try:
+            rows = db.fetchall(
+                """SELECT thread_id,
+                          MIN(content) FILTER (WHERE role = 'user') AS first_message,
+                          COUNT(*) AS message_count,
+                          MAX(created_at) AS last_active,
+                          MAX((metadata->>'graph_id')::text) AS graph_id
+                   FROM chat_history
+                   WHERE session_id = %s
+                   GROUP BY thread_id
+                   ORDER BY MAX(created_at) DESC
+                   LIMIT 50""",
+                (session_id,)
+            )
+        except Exception:
+            # Fallback for DBs without FILTER clause
+            rows = db.fetchall(
+                """SELECT thread_id,
+                          MIN(content) AS first_message,
+                          COUNT(*) AS message_count,
+                          MAX(created_at) AS last_active
+                   FROM chat_history
+                   WHERE session_id = %s
+                   GROUP BY thread_id
+                   ORDER BY MAX(created_at) DESC
+                   LIMIT 50""",
+                (session_id,)
+            )
+
+        sessions = []
+        for row in (rows or []):
+            first_msg = row.get("first_message", "") or ""
+            sessions.append({
+                "thread_id": row.get("thread_id", "main"),
+                "first_message": first_msg[:80],
+                "message_count": row.get("message_count", 0),
+                "last_active": row.get("last_active", "").isoformat() if hasattr(row.get("last_active", ""), "isoformat") else str(row.get("last_active", "")),
+                "graph_title": "",
+                "topic_summary": first_msg[:80] if first_msg else "Conversation",
+            })
+
+        return jsonify({"sessions": sessions})
+
+    app.logger.info("Arivu Phase 8 app ready (with Athena routes)")
     return app
 
 
@@ -5634,10 +5878,20 @@ def _paper_to_dict(paper) -> dict:
     }
 
 
+    # (Old Athena routes block removed - moved before return app)
+
+
 if __name__ == "__main__":
     application = create_app()
+    # Disable the auto-reloader to prevent it from killing active SSE streams.
+    # The reloader watches ALL Python files including site-packages, and when
+    # antivirus/IDE indexers touch library files, it restarts the server mid-stream,
+    # wiping the in-memory _active_streams dict → "Invalid or expired stream" errors.
+    # Trade-off: you need to manually restart the server after code changes.
+    # To re-enable: set use_reloader=True (but SSE streams may break randomly).
     application.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
         debug=Config.DEBUG,
+        use_reloader=False,
     )

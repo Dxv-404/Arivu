@@ -90,3 +90,26 @@ class HealthResponse(BaseModel):
     db: bool
     nlp_worker: bool
     version: str = "1.0.0"
+
+
+# ── Athena Chat Schemas (Phase A) ─────────────────────────────────────────
+# Per ATHENA_PHASE_A.md Section 2.1.29
+
+class AthenaSendRequest(BaseModel):
+    """POST /api/athena/send request body."""
+    message: str = Field(..., min_length=1, max_length=2000)
+    graph_id: Optional[str] = None
+    thread_id: str = Field(default="main", max_length=100)
+
+    @field_validator("message")
+    @classmethod
+    def sanitize_message(cls, v: str) -> str:
+        return re.sub(r"[<>]", "", v).strip()
+
+
+class AthenaHistoryStoreRequest(BaseModel):
+    """POST /api/athena/history request body."""
+    role: str = Field(..., pattern="^(user|assistant|system)$")
+    content: str = Field(..., min_length=1)
+    thread_id: str = Field(default="main")
+    metadata: dict = Field(default_factory=dict)

@@ -63,3 +63,6 @@ Markdown==3.5.2
 # Payments / email (Phase 6)
 stripe==9.9.0
 resend==2.3.0
+
+# Gemini (Athena quality assurance + multimodal)
+google-generativeai==0.8.3

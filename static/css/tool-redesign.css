@@ -4722,3 +4722,77 @@ body:has(.tool-layout-v2) #genealogy-close {
 
 /* Chain SVG */
 .pf-chain-svg { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 1200; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ATHENA LAYOUT MODES (Feature #007)
+   Grid template adjustments when Athena panel is open
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* When Athena is open: overlay panel on the right without squeezing the graph.
+   The graph stays full width underneath. Athena overlays on top. */
+.tool-layout-v2.athena-panel > #athena-panel {
+  position: fixed !important;
+  top: 0;
+  right: 0;
+  width: var(--athena-panel-width, 380px) !important;
+  max-width: var(--athena-panel-width, 380px) !important;
+  height: 100vh;
+  z-index: 100;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+  border-left: 1px solid #E2E8F0;
+}
+/* Hide the right panel when Athena is open */
+.tool-layout-v2.athena-panel > #right-panel {
+  display: none !important;
+}
+/* Collapse the 340px right-panel grid column so graph gets full width */
+.tool-layout-v2.athena-panel {
+  grid-template-columns: 56px 1fr 0px !important;
+}
+
+/* Split mode: graph shrinks, Athena takes right half */
+.tool-layout-v2.athena-split > #athena-panel {
+  position: fixed !important;
+  top: 0;
+  right: 0;
+  width: 50vw !important;
+  max-width: 50vw !important;
+  height: 100vh;
+  z-index: 100;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.08);
+  border-left: 1px solid #E2E8F0;
+}
+.tool-layout-v2.athena-split > #right-panel {
+  display: none !important;
+}
+.tool-layout-v2.athena-split {
+  grid-template-columns: 56px 1fr 0px !important;
+  margin-right: 50vw !important;
+}
+
+/* Full mode: Athena takes the full viewport */
+.tool-layout-v2.athena-full > #athena-panel {
+  position: fixed !important;
+  top: 0;
+  right: 0;
+  width: calc(100vw - 56px) !important;
+  max-width: calc(100vw - 56px) !important;
+  height: 100vh;
+  z-index: 100;
+  box-shadow: none;
+  border-left: 1px solid #E2E8F0;
+}
+.tool-layout-v2.athena-full > #right-panel {
+  display: none !important;
+}
+.tool-layout-v2.athena-full #graph-container {
+  display: none;
+}
+.tool-layout-v2.athena-full {
+  grid-template-columns: 56px 1fr 0px !important;
+}
+
+/* Smooth transition between modes */
+.tool-layout-v2 {
+  transition: grid-template-columns 300ms ease-out;
+}

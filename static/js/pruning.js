@@ -60,6 +60,17 @@ class PruningSystem {
     this.state = 'animating';
     this._hidePill();
 
+    // Phase C #108: Dispatch prune start event for Athena
+    const prunedIds = [...this.pruneSet];
+    const prunedNode = this.graph.allNodes?.find(n => n.id === prunedIds[0]);
+    document.dispatchEvent(new CustomEvent('athena:graph:prune', {
+      detail: {
+        phase: 'start',
+        pruned_paper_id: prunedIds[0] || '',
+        pruned_paper_title: prunedNode?.title || '',
+      }
+    }));
+
     // Snapshot DNA before pruning (guard against missing chart)
     if (window._dnaChart && typeof window._dnaChart.takeSnapshot === 'function') {
       window._dnaChart.takeSnapshot();
@@ -86,6 +97,19 @@ class PruningSystem {
       await this._animateCascade(result);
       this.state = 'pruned';
       this._showPrunedState(result);
+
+      // Phase C #108: Dispatch prune complete event for Athena
+      document.dispatchEvent(new CustomEvent('athena:graph:prune', {
+        detail: {
+          phase: 'complete',
+          pruned_paper_id: prunedIds[0] || '',
+          pruned_paper_title: prunedNode?.title || '',
+          collapsed_nodes: (result.collapsed_nodes || []).slice(0, 50),
+          surviving_nodes: (result.surviving_nodes || []).slice(0, 20),
+          impact_percentage: result.impact_percentage || 0,
+          collapsed_count: result.collapsed_count || (result.collapsed_nodes || []).length,
+        }
+      }));
 
       // Update right panel
       if (window._rightPanel) window._rightPanel.renderPruningStats(result);
@@ -242,6 +266,11 @@ class PruningSystem {
 
     // Notify window manager that pruning was reset (hides pruning panel in graph window)
     window.dispatchEvent(new CustomEvent('arivu:prune-reset'));
+
+    // Phase C #108: Dispatch prune reset event for Athena
+    document.dispatchEvent(new CustomEvent('athena:graph:prune', {
+      detail: { phase: 'reset' }
+    }));
   }
 
   _updatePill() {

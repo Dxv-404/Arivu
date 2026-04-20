@@ -49,10 +49,18 @@ class TreeLayout {
 
     this.zoomGroup = this.svg.append('g');
 
+    this._zoomDebounceTimer = null; // Phase C #106
     this.zoom = d3.zoom()
       .scaleExtent([0.1, 5])
       .on('zoom', (event) => {
         this.zoomGroup.attr('transform', event.transform);
+        // Phase C #105/#106: Store transform for awareness state
+        if (window._arivuGraph) window._arivuGraph.currentTransform = event.transform;
+        // Phase C #106: Debounced zoom awareness dispatch (500ms)
+        clearTimeout(this._zoomDebounceTimer);
+        this._zoomDebounceTimer = setTimeout(() => {
+          this._dispatchTreeZoomAwareness(event.transform);
+        }, 500);
       });
 
     this.svg.call(this.zoom);
@@ -222,6 +230,26 @@ class TreeLayout {
         window.dispatchEvent(new CustomEvent('arivu:node-clicked', {
           detail: { nodeId: d.data.id, paper: d.data.data }
         }));
+        // Phase C #105: Dispatch athena:graph:click for click-aware chat
+        const paper = d.data.data;
+        if (window._arivuGraph) window._arivuGraph.lastClickedNode = paper;
+        document.dispatchEvent(new CustomEvent('athena:graph:click', {
+          detail: {
+            type: 'node',
+            node: {
+              paper_id: paper.id || d.data.id,
+              title: paper.title || '',
+              year: paper.year || null,
+              authors: paper.authors || [],
+              citation_count: paper.citation_count || 0,
+              fields_of_study: paper.fields_of_study || [],
+              pagerank_score: paper.pagerank || null,
+              cluster_name: null,
+              depth: paper.depth != null ? paper.depth : (d.depth || null),
+            },
+            edge: null,
+          }
+        }));
       }
     })
     .on('dblclick', (event, d) => {
@@ -231,6 +259,93 @@ class TreeLayout {
         || (nodeData.doi ? `https://doi.org/${encodeURIComponent(nodeData.doi)}` : null)
         || (nodeData.id ? `https://www.semanticscholar.org/paper/${nodeData.id}` : null);
       if (target) window.open(target, '_blank');
+    })
+    .on('contextmenu', (event, d) => {
+      // Phase C #004: Right-click context menu for tree layout nodes
+      event.preventDefault();
+      event.stopPropagation();
+      const paper = d.data?.data;
+      if (!paper) return;
+
+      // Remove existing menu
+      const existing = document.getElementById('arivu-graph-context-menu');
+      if (existing) existing.remove();
+
+      const menu = document.createElement('div');
+      menu.id = 'arivu-graph-context-menu';
+      menu.className = 'graph-context-menu';
+      menu.style.cssText = `position:fixed;left:${event.clientX}px;top:${event.clientY}px;z-index:1000;`;
+
+      const discussItem = document.createElement('div');
+      discussItem.className = 'context-menu-item';
+      discussItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg> Discuss with Athena`;
+      discussItem.addEventListener('click', () => {
+        // Set click context
+        if (window._arivuGraph) window._arivuGraph.lastClickedNode = paper;
+        document.dispatchEvent(new CustomEvent('athena:graph:click', {
+          detail: { type: 'node', node: { paper_id: paper.id || d.data.id, title: paper.title || '', year: paper.year || null, authors: paper.authors || [], citation_count: paper.citation_count || 0, fields_of_study: paper.fields_of_study || [], pagerank_score: null, cluster_name: null, depth: d.depth != null ? d.depth : null }, edge: null }
+        }));
+        document.dispatchEvent(new CustomEvent('athena:discuss:request', {
+          detail: { paper_id: paper.id || d.data.id, title: paper.title || '', year: paper.year || null }
+        }));
+        menu.remove();
+      });
+      menu.appendChild(discussItem);
+
+      // "Deep Dive with Athena" option (Phase C #016)
+      const deepDiveItem = document.createElement('div');
+      deepDiveItem.className = 'context-menu-item';
+      deepDiveItem.dataset.action = 'deep-dive-athena';
+      deepDiveItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L7 13 M3 5 L7 1 L11 5" fill="none" stroke="currentColor" stroke-width="1.5" transform="rotate(180 7 7)"/></svg> Deep Dive with Athena`;
+      deepDiveItem.addEventListener('click', () => {
+        const paperId = paper.id || d.data.id;
+        const paperTitle = paper.title || '';
+        // Set click context
+        document.dispatchEvent(new CustomEvent('athena:graph:click', {
+          detail: {
+            type: 'node',
+            node: { paper_id: paperId, title: paperTitle, year: paper.year || null, authors: paper.authors || [], citation_count: paper.citation_count || 0 },
+            edge: null,
+          }
+        }));
+        // Open Athena if closed, then send deep dive
+        if (window.athenaLayout && !window.athenaLayout.isOpen) {
+          window.athenaLayout.toggle();
+          setTimeout(() => {
+            if (window.athenaEngine) window.athenaEngine.handleUserMessage(`deep dive on "${paperTitle || paperId}"`);
+          }, 300);
+        } else if (window.athenaEngine) {
+          window.athenaEngine.handleUserMessage(`deep dive on "${paperTitle || paperId}"`);
+        }
+        menu.remove();
+      });
+      menu.appendChild(deepDiveItem);
+
+      // "View Details" option
+      const detailsItem = document.createElement('div');
+      detailsItem.className = 'context-menu-item';
+      detailsItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="5" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1"/><line x1="5" y1="7" x2="9" y2="7" stroke="currentColor" stroke-width="1"/></svg> View Details`;
+      detailsItem.addEventListener('click', () => {
+        const url = paper.url || (paper.doi ? `https://doi.org/${encodeURIComponent(paper.doi)}` : null)
+          || `https://www.semanticscholar.org/paper/${paper.id || d.data.id}`;
+        if (url) window.open(url, '_blank');
+        cleanup();
+      });
+      menu.appendChild(detailsItem);
+
+      document.body.appendChild(menu);
+      // Shared cleanup (HIGH-2 fix)
+      const cleanup = () => { menu.remove(); document.removeEventListener('click', closeH); document.removeEventListener('keydown', escH); };
+      const closeH = (e) => { if (!menu.contains(e.target)) cleanup(); };
+      setTimeout(() => document.addEventListener('click', closeH), 50);
+      const escH = (e) => { if (e.key === 'Escape') cleanup(); };
+      document.addEventListener('keydown', escH);
+      // Viewport clipping fix (HIGH-3)
+      requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 8}px`;
+        if (rect.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - rect.height - 8}px`;
+      });
     });
   }
 
@@ -412,5 +527,129 @@ class TreeLayout {
       this.svg.remove();
       this.svg = null;
     }
+  }
+
+  /**
+   * Phase C #106: Compute visible tree nodes and dispatch zoom awareness event.
+   * Called 500ms after the last zoom/pan gesture (debounced).
+   */
+  _dispatchTreeZoomAwareness(transform) {
+    try {
+      const k = transform.k || 1;
+      const tx = transform.x || 0;
+      const ty = transform.y || 0;
+      const svgRect = this.svg?.node()?.getBoundingClientRect();
+      if (!svgRect) return;
+
+      const w = svgRect.width;
+      const h = svgRect.height;
+
+      // Collect all tree nodes from the hierarchy
+      const allTreeNodes = [];
+      if (this.treeRoot) {
+        this.treeRoot.each(d => {
+          if (d.data?.data) allTreeNodes.push(d);
+        });
+      }
+
+      // Compute visible nodes (those within viewport after transform)
+      const visibleIds = [];
+      for (const d of allTreeNodes) {
+        // Tree nodes use d.x (horizontal in tree) and d.y (depth-based vertical)
+        const sx = (d.y || 0) * k + tx;
+        const sy = (d.x || 0) * k + ty;
+        if (sx > -100 && sx < w + 100 && sy > -50 && sy < h + 50) {
+          visibleIds.push(d.data.id || d.data.data?.id);
+        }
+      }
+
+      // Determine cluster focus (>60% of visible nodes in same cluster)
+      let clusterFocus = null;
+      if (visibleIds.length > 0 && window._arivuGraph?._lookupClusterName) {
+        const clusterCounts = {};
+        for (const id of visibleIds) {
+          const name = window._arivuGraph._lookupClusterName(id);
+          if (name) clusterCounts[name] = (clusterCounts[name] || 0) + 1;
+        }
+        for (const [name, count] of Object.entries(clusterCounts)) {
+          if (count / visibleIds.length > 0.6) {
+            clusterFocus = name;
+            break;
+          }
+        }
+      }
+
+      document.dispatchEvent(new CustomEvent('athena:graph:zoom', {
+        detail: {
+          zoom_level: k,
+          visible_nodes: visibleIds.filter(Boolean),
+          visible_count: visibleIds.filter(Boolean).length,
+          cluster_focus: clusterFocus,
+        }
+      }));
+    } catch (e) {
+      // Silent failure — zoom awareness is non-critical
+    }
+  }
+
+  // ── Phase C #012: Tree Annotation Support ────────────────────────────
+
+  /**
+   * Add annotation to a tree node — renders as a branch label extending
+   * from the node rect with the annotation text.
+   */
+  addAnnotation(paperId, label, color = 'gold') {
+    if (!this.nodeGroup) return;
+    const truncLabel = (label || '').length > 20 ? label.substring(0, 18) + '..' : (label || '');
+    const fillColor = '#0D1117'; // Black container
+    const borderColor = color === 'teal' ? '#06B6D4' : '#D4A843';
+
+    this.removeAnnotation(paperId);
+
+    this.nodeGroup.selectAll('g.tree-node')
+      .filter(d => (d.data?.data?.id || d.data?.id) === paperId)
+      .each(function() {
+        const g = d3.select(this);
+        const badge = g.append('g')
+          .attr('class', 'tree-annotation-badge')
+          .attr('data-annotation-id', paperId)
+          .style('pointer-events', 'none');
+
+        // Branch line extending down from node
+        badge.append('line')
+          .attr('x1', 0).attr('y1', 8)
+          .attr('x2', 0).attr('y2', 22)
+          .attr('stroke', borderColor)
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '3,2');
+
+        // Label background — black container
+        const textW = truncLabel.length * 5.5 + 14;
+        badge.append('rect')
+          .attr('x', -textW / 2).attr('y', 22)
+          .attr('width', textW).attr('height', 16)
+          .attr('rx', 3)
+          .attr('fill', fillColor)
+          .attr('stroke', borderColor)
+          .attr('stroke-width', 1)
+          .attr('opacity', 0.95);
+
+        // Label text — white on black, Array font
+        badge.append('text')
+          .attr('x', 0).attr('y', 33)
+          .attr('text-anchor', 'middle')
+          .attr('font-size', '9px')
+          .attr('font-family', "'Array', 'JetBrains Mono', monospace")
+          .attr('font-weight', '700')
+          .attr('fill', '#fff')
+          .text(truncLabel);
+      });
+  }
+
+  removeAnnotation(paperId) {
+    if (!this.nodeGroup) return;
+    this.nodeGroup.selectAll('.tree-annotation-badge')
+      .filter(function() { return this.dataset.annotationId === paperId; })
+      .remove();
   }
 }

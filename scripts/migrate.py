@@ -479,6 +479,16 @@ CREATE INDEX IF NOT EXISTS idx_pf_created ON pathfinder_prompts(created_at DESC)
 -- Pathfinder schema additions (embedding column for semantic dedup)
 ALTER TABLE pathfinder_prompts ADD COLUMN IF NOT EXISTS embedding vector(384);
 ALTER TABLE pathfinder_prompts ADD COLUMN IF NOT EXISTS seed_paper_title TEXT;
+
+-- Athena chat enhancements (Phase A)
+-- Per ATHENA_PHASE_A.md Section 2.1.12
+ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS thread_id TEXT DEFAULT 'main';
+ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
+-- Allow 'system' role for Athena system messages
+ALTER TABLE chat_history DROP CONSTRAINT IF EXISTS chat_history_role_check;
+ALTER TABLE chat_history ADD CONSTRAINT chat_history_role_check CHECK (role IN ('user', 'assistant', 'system'));
+CREATE INDEX IF NOT EXISTS idx_chat_history_thread ON chat_history(session_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_chat_history_session_time ON chat_history(session_id, created_at DESC);
 """
 
 

@@ -327,6 +327,66 @@ class GraphLoader {
     // Notify deep intelligence module that graph data is ready
     window.dispatchEvent(new CustomEvent('arivu:graph-ready', { detail: { graphData } }));
 
+    // Phase C #012: Restore annotations from sessionStorage
+    // Use a retry loop to handle cases where nodeElements aren't ready yet
+    const _restoreAnn = (attempt) => {
+      const graph = window._arivuGraph;
+      if (!graph || !graph.nodeElements) {
+        if (attempt < 10) setTimeout(() => _restoreAnn(attempt + 1), 500);
+        return;
+      }
+      const graphId = graphData?.metadata?.graph_id || graph.metadata?.graph_id || 'default';
+      try {
+        const annotations = JSON.parse(sessionStorage.getItem(`athena_annotations_${graphId}`) || '{}');
+        const count = Object.keys(annotations).length;
+        console.log(`[Annotations] Restore attempt ${attempt}: graphId=${graphId}, count=${count}, hasNodes=${!!graph.nodeElements}`);
+        if (!count) return;
+        for (const [paperId, ann] of Object.entries(annotations)) {
+          // Direct D3 annotation — bypass the addAnnotation method in case it's stale
+          const label = ann.label || 'noted';
+          const truncLabel = label.length > 20 ? label.substring(0, 18) + '..' : label;
+          graph.nodeElements
+            .filter(d => d.id === paperId)
+            .each(function() {
+              // Remove existing
+              d3.select(this).selectAll('.annotation-badge').remove();
+              const badge = d3.select(this).append('g')
+                .attr('class', 'annotation-badge')
+                .attr('data-annotation-id', paperId)
+                .style('pointer-events', 'none');
+              const rectW = truncLabel.length * 6.5 + 24;
+              const rectH = 18;
+              const borderColor = ann.color === 'teal' ? '#06B6D4' : '#D4A843';
+              badge.append('rect')
+                .attr('x', -rectW / 2).attr('y', -rectH - 16)
+                .attr('width', rectW).attr('height', rectH)
+                .attr('rx', 4).attr('fill', '#0D1117')
+                .attr('stroke', borderColor).attr('stroke-width', 1.5).attr('opacity', 0.95);
+              badge.append('polygon')
+                .attr('points', '-4,-16 4,-16 0,-11')
+                .attr('fill', '#0D1117').attr('stroke', borderColor).attr('stroke-width', 0.5);
+              badge.append('text')
+                .attr('x', 0).attr('y', -rectH / 2 - 16 + 5)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '10px')
+                .attr('font-family', "'Array', 'JetBrains Mono', monospace")
+                .attr('font-weight', '700').attr('fill', '#fff')
+                .text(truncLabel);
+              console.log(`[Annotations] Restored badge on: ${paperId.substring(0,12)}...`);
+            });
+        }
+        // Tree layout
+        if (window._treeLayout?.addAnnotation) {
+          for (const [paperId, ann] of Object.entries(annotations)) {
+            window._treeLayout.addAnnotation(paperId, ann.label, ann.color);
+          }
+        }
+      } catch (e) {
+        console.warn('[Annotations] Restore failed:', e);
+      }
+    };
+    setTimeout(() => _restoreAnn(0), 2000);
+
     // Initialise semantic zoom AFTER graph renders and node positions settle
     if (window.SemanticZoomRenderer && window._arivuGraph && graphData.dna_profile?.clusters) {
       window._arivuGraph._semanticZoom = new SemanticZoomRenderer(
@@ -403,6 +463,16 @@ class GraphLoader {
             edges: window._arivuGraph.allEdges,
             metadata: window._arivuGraph.metadata
           });
+          // Phase C #012: Restore annotations on tree layout after creation
+          if (window._treeLayout?.addAnnotation) {
+            const graphId = window._arivuGraph?.metadata?.graph_id || 'default';
+            try {
+              const annotations = JSON.parse(sessionStorage.getItem(`athena_annotations_${graphId}`) || '{}');
+              for (const [paperId, ann] of Object.entries(annotations)) {
+                window._treeLayout.addAnnotation(paperId, ann.label, ann.color);
+              }
+            } catch (e) {}
+          }
         }
         // Hide force-directed SVG, show tree
         const forceSvg = container.querySelector('svg:not(.tree-svg)');

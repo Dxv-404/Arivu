@@ -48,11 +48,19 @@ class ArivuGraph {
     this.edgeGroup = this.zoomGroup.append('g').attr('class', 'edges');
     this.nodeGroup = this.zoomGroup.append('g').attr('class', 'nodes');
 
+    this._zoomDebounceTimer = null; // Phase C #106
     this.zoom = d3.zoom()
       .scaleExtent([0.1, 4])
       .on('zoom', (event) => {
         this.zoomGroup.attr('transform', event.transform);
         this._handleZoomLevelChange(event.transform.k);
+        // Phase C #105: Store transform for awareness state
+        if (window._arivuGraph) window._arivuGraph.currentTransform = event.transform;
+        // Phase C #106: Debounced zoom awareness dispatch (500ms)
+        clearTimeout(this._zoomDebounceTimer);
+        this._zoomDebounceTimer = setTimeout(() => {
+          this._dispatchZoomAwareness(event.transform);
+        }, 500);
       });
 
     this.svg.call(this.zoom);
@@ -191,7 +199,9 @@ class ArivuGraph {
           .attr('stroke-opacity', 0.4)
           .attr('marker-end', d => `url(#arrow-${d.mutation_type || 'unknown'})`)
           .on('mouseover', (event, d) => this._tooltipSystem.showEdgeTooltip(event, d))
-          .on('mouseout', () => this._tooltipSystem.hide()),
+          .on('mouseout', () => this._tooltipSystem.hide())
+          .on('click', (event, d) => this._handleEdgeClick(event, d))
+          .style('cursor', 'pointer'),
         update => update,
         exit => exit.remove()
       );
@@ -224,7 +234,8 @@ class ArivuGraph {
             })
             .on('mouseover', (event, d) => this._tooltipSystem.showNodeTooltip(event, d))
             .on('mouseout', () => this._tooltipSystem.hide())
-            .on('keydown', (event, d) => this._handleNodeKeydown(event, d));
+            .on('keydown', (event, d) => this._handleNodeKeydown(event, d))
+            .on('contextmenu', (event, d) => this._handleContextMenu(event, d));
 
           // Main circle
           g.append('circle')
@@ -431,8 +442,281 @@ class ArivuGraph {
 
     if (this.mode === 'animating') return;
 
-    // Dispatch for pruning system
+    // Dispatch for pruning system (existing)
     window.dispatchEvent(new CustomEvent('arivu:node-clicked', { detail: { nodeId: d.id, paper: d } }));
+
+    // Phase C #105: Dispatch athena:graph:click for click-aware chat
+    if (window._arivuGraph) window._arivuGraph.lastClickedNode = d;
+    document.dispatchEvent(new CustomEvent('athena:graph:click', {
+      detail: {
+        type: 'node',
+        node: {
+          paper_id: d.id,
+          title: d.title || '',
+          year: d.year || null,
+          authors: d.authors || [],
+          citation_count: d.citation_count || 0,
+          fields_of_study: d.fields_of_study || [],
+          pagerank_score: d.pagerank || null,
+          cluster_name: this._lookupClusterName(d.id),
+          depth: d.depth != null ? d.depth : null,
+        },
+        edge: null,
+      }
+    }));
+  }
+
+  /**
+   * Phase C #105: Look up which DNA cluster a node belongs to.
+   * Searches dna_profile.clusters from the graph data.
+   */
+  _lookupClusterName(nodeId) {
+    try {
+      const clusters = window._graphLoader?._graphData?.dna_profile?.clusters
+        || window._arivuGraph?._semanticZoom?.clusters;
+      if (!clusters) return null;
+      // clusters can be an array (from dna_profile) or object (from SemanticZoomRenderer)
+      if (Array.isArray(clusters)) {
+        for (const c of clusters) {
+          if (c.papers && c.papers.includes(nodeId)) return c.name;
+        }
+      } else {
+        for (const [name, c] of Object.entries(clusters)) {
+          if (c.paperIds && c.paperIds.includes(nodeId)) return name;
+        }
+      }
+    } catch { /* silent fallback */ }
+    return null;
+  }
+
+  /**
+   * Phase C #105: Handle edge click for click-aware chat.
+   * Dispatches athena:graph:click with edge payload.
+   */
+  _handleEdgeClick(event, d) {
+    if (this.mode === 'scripted' || this.mode === 'animating') return;
+
+    const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+    const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+
+    // Look up titles: D3 may store source/target as objects (after simulation tick) or strings (before)
+    const citingTitle = typeof d.source === 'object'
+      ? (d.source.title || '')
+      : (this.allNodes?.find(n => n.id === sourceId)?.title || '');
+    const citedTitle = typeof d.target === 'object'
+      ? (d.target.title || '')
+      : (this.allNodes?.find(n => n.id === targetId)?.title || '');
+
+    document.dispatchEvent(new CustomEvent('athena:graph:click', {
+      detail: {
+        type: 'edge',
+        node: null,
+        edge: {
+          edge_id: `${sourceId}:${targetId}`,
+          citing_paper_id: sourceId,
+          cited_paper_id: targetId,
+          citing_title: citingTitle,
+          cited_title: citedTitle,
+          mutation_type: d.mutation_type || 'incidental',
+          mutation_confidence: d.mutation_confidence || 0,
+          citation_intent: d.citation_intent || '',
+          citing_sentence: d.citing_sentence || null,
+          cited_sentence: d.cited_sentence || null,
+        },
+      }
+    }));
+  }
+
+  /**
+   * Phase C #004: Right-click context menu for Discuss Integration.
+   * Creates a minimal context menu with "Discuss with Athena" option.
+   */
+  _handleContextMenu(event, d) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Remove any existing context menu
+    const existing = document.getElementById('arivu-graph-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'arivu-graph-context-menu';
+    menu.className = 'graph-context-menu';
+    menu.style.cssText = `position:fixed;left:${event.clientX}px;top:${event.clientY}px;z-index:1000;`;
+
+    // "Discuss with Athena" option
+    const discussItem = document.createElement('div');
+    discussItem.className = 'context-menu-item';
+    discussItem.dataset.action = 'discuss-athena';
+    discussItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></svg> Discuss with Athena`;
+    discussItem.addEventListener('click', () => {
+      // Set click context directly (CRITICAL-5 fix: don't call _handleNodeClick which triggers pruning)
+      if (window._arivuGraph) window._arivuGraph.lastClickedNode = d;
+      document.dispatchEvent(new CustomEvent('athena:graph:click', {
+        detail: {
+          type: 'node',
+          node: {
+            paper_id: d.id, title: d.title || '', year: d.year || null,
+            authors: d.authors || [], citation_count: d.citation_count || 0,
+            fields_of_study: d.fields_of_study || [],
+            pagerank_score: d.pagerank || null,
+            cluster_name: this._lookupClusterName(d.id), depth: d.depth != null ? d.depth : null,
+          },
+          edge: null,
+        }
+      }));
+      // Dispatch discuss request
+      document.dispatchEvent(new CustomEvent('athena:discuss:request', {
+        detail: {
+          paper_id: d.id,
+          title: d.title || '',
+          year: d.year || null,
+        }
+      }));
+      menu.remove();
+    });
+    menu.appendChild(discussItem);
+
+    // "Deep Dive with Athena" option (Phase C #016)
+    const deepDiveItem = document.createElement('div');
+    deepDiveItem.className = 'context-menu-item';
+    deepDiveItem.dataset.action = 'deep-dive-athena';
+    deepDiveItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L7 13 M3 5 L7 1 L11 5" fill="none" stroke="currentColor" stroke-width="1.5" transform="rotate(180 7 7)"/></svg> Deep Dive with Athena`;
+    deepDiveItem.addEventListener('click', () => {
+      // Set click context
+      document.dispatchEvent(new CustomEvent('athena:graph:click', {
+        detail: {
+          type: 'node',
+          node: {
+            paper_id: d.id, title: d.title || '', year: d.year || null,
+            authors: d.authors || [], citation_count: d.citation_count || 0,
+          },
+          edge: null,
+        }
+      }));
+
+      // Open Athena panel if not already open
+      if (window.athenaLayout && !window.athenaLayout.isOpen) {
+        window.athenaLayout.toggle();
+        // Small delay to let panel render before sending message
+        setTimeout(() => {
+          if (window.athenaEngine) {
+            window.athenaEngine.handleUserMessage(`deep dive on "${d.title || d.id}"`);
+          }
+        }, 300);
+      } else if (window.athenaEngine) {
+        // Already open — send immediately on current session
+        window.athenaEngine.handleUserMessage(`deep dive on "${d.title || d.id}"`);
+      }
+      menu.remove();
+    });
+    menu.appendChild(deepDiveItem);
+
+    // "View Details" option (opens paper URL)
+    const detailsItem = document.createElement('div');
+    detailsItem.className = 'context-menu-item';
+    detailsItem.innerHTML = `<svg class="menu-icon" width="14" height="14" viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="5" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1"/><line x1="5" y1="7" x2="9" y2="7" stroke="currentColor" stroke-width="1"/><line x1="5" y1="9" x2="7" y2="9" stroke="currentColor" stroke-width="1"/></svg> View Details`;
+    detailsItem.addEventListener('click', () => {
+      const url = d.url || (d.doi ? `https://doi.org/${encodeURIComponent(d.doi)}` : null)
+        || `https://www.semanticscholar.org/paper/${d.id}`;
+      if (url) window.open(url, '_blank');
+      menu.remove();
+    });
+    menu.appendChild(detailsItem);
+
+    document.body.appendChild(menu);
+
+    // HIGH-2 fix: Shared cleanup function removes BOTH listeners
+    const cleanup = () => {
+      menu.remove();
+      document.removeEventListener('click', closeHandler);
+      document.removeEventListener('keydown', escHandler);
+    };
+
+    // Close on click outside
+    const closeHandler = (e) => {
+      if (!menu.contains(e.target)) cleanup();
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 50);
+
+    // Close on Escape
+    const escHandler = (e) => {
+      if (e.key === 'Escape') cleanup();
+    };
+    document.addEventListener('keydown', escHandler);
+
+    // HIGH-3 fix: Adjust position if menu clips viewport edge
+    requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      if (rect.right > window.innerWidth) {
+        menu.style.left = `${window.innerWidth - rect.width - 8}px`;
+      }
+      if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${window.innerHeight - rect.height - 8}px`;
+      }
+    });
+  }
+
+  /**
+   * Phase C #106: Compute visible nodes and dispatch zoom awareness event.
+   * Called 500ms after the last zoom/pan gesture (debounced).
+   */
+  _dispatchZoomAwareness(transform) {
+    try {
+      const k = transform.k || 1;
+      const tx = transform.x || 0;
+      const ty = transform.y || 0;
+      const svgRect = this.svg.node()?.getBoundingClientRect();
+      if (!svgRect) return;
+
+      const w = svgRect.width;
+      const h = svgRect.height;
+
+      // Compute visible nodes (those within the viewport after transform)
+      const visibleIds = [];
+      const nodes = this.allNodes || [];
+      // Limit to first 200 nodes for performance on large graphs
+      const checkNodes = nodes.length > 200
+        ? nodes.slice().sort((a, b) => (b.citation_count || 0) - (a.citation_count || 0)).slice(0, 200)
+        : nodes;
+
+      for (const n of checkNodes) {
+        const sx = (n.x || 0) * k + tx;
+        const sy = (n.y || 0) * k + ty;
+        if (sx > 0 && sx < w && sy > 0 && sy < h) {
+          visibleIds.push(n.id);
+        }
+      }
+
+      // Determine cluster focus (>60% of visible nodes in same cluster)
+      let clusterFocus = null;
+      if (visibleIds.length > 0) {
+        const clusterCounts = {};
+        for (const id of visibleIds) {
+          const clusterName = this._lookupClusterName(id);
+          if (clusterName) {
+            clusterCounts[clusterName] = (clusterCounts[clusterName] || 0) + 1;
+          }
+        }
+        for (const [name, count] of Object.entries(clusterCounts)) {
+          if (count / visibleIds.length > 0.6) {
+            clusterFocus = name;
+            break;
+          }
+        }
+      }
+
+      document.dispatchEvent(new CustomEvent('athena:graph:zoom', {
+        detail: {
+          zoom_level: k,
+          visible_nodes: visibleIds,
+          visible_count: visibleIds.length,
+          cluster_focus: clusterFocus,
+        }
+      }));
+    } catch (e) {
+      // Silent failure — zoom awareness is non-critical
+    }
   }
 
   _handleNodeKeydown(event, d) {
@@ -574,6 +858,145 @@ class TooltipSystem {
     const c = { adoption:'#3B82F6', generalization:'#06B6D4', specialization:'#8B5CF6',
                  hybridization:'#F59E0B', contradiction:'#EF4444', revival:'#22C55E' };
     return c[type] || '#475569';
+  }
+
+  // ── Phase C #012: AI Annotations on Graph ──────────────────────────────
+
+  /**
+   * Add an annotation badge to a node in the force graph.
+   * @param {string} paperId - The node ID to annotate
+   * @param {string} label - Annotation text (max 20 chars)
+   * @param {string} color - 'gold' (user) or 'teal' (athena)
+   */
+  addAnnotation(paperId, label, color = 'gold') {
+    if (!this.nodeElements || !paperId) return;
+
+    // Max 15 annotations
+    const graphId = this.metadata?.graph_id || 'default';
+    const annotations = this._loadAnnotations(graphId);
+    if (Object.keys(annotations).length >= 15 && !annotations[paperId]) return;
+
+    // Truncate label
+    const truncLabel = (label || '').length > 20 ? label.substring(0, 18) + '..' : (label || '');
+    const fillColor = '#0D1117'; // Black container for all annotations
+    const borderColor = color === 'teal' ? '#06B6D4' : '#D4A843';
+
+    // Remove existing annotation on this node first
+    this.removeAnnotation(paperId);
+
+    // Append label badge to the node's <g> group — visible tag design
+    const matchCount = this.nodeElements.filter(d => d.id === paperId).size();
+    console.log(`[Annotations] addAnnotation: paperId=${paperId.substring(0,12)}... matchCount=${matchCount}`);
+    this.nodeElements
+      .filter(d => d.id === paperId)
+      .each(function() {
+        const g = d3.select(this);
+        const badge = g.append('g')
+          .attr('class', 'annotation-badge')
+          .attr('data-annotation-id', paperId)
+          .style('pointer-events', 'none');
+
+        // Measure text width for background rect
+        const tempText = badge.append('text')
+          .attr('font-size', '10px')
+          .attr('font-family', 'JetBrains Mono, monospace')
+          .attr('font-weight', '600')
+          .text(truncLabel)
+          .style('visibility', 'hidden');
+        const textWidth = tempText.node()?.getBBox()?.width || (truncLabel.length * 6.5);
+        tempText.remove();
+
+        const padX = 6, padY = 3;
+        const rectW = textWidth + padX * 2 + 12; // +12 for dot
+        const rectH = 18;
+
+        // Background rounded rect — black container
+        badge.append('rect')
+          .attr('x', -rectW / 2)
+          .attr('y', -rectH - 16) // Above the node
+          .attr('width', rectW)
+          .attr('height', rectH)
+          .attr('rx', 4)
+          .attr('fill', fillColor)
+          .attr('stroke', borderColor)
+          .attr('stroke-width', 1.5)
+          .attr('opacity', 0.95);
+
+        // Small triangle pointing down to node
+        badge.append('polygon')
+          .attr('points', `-4,${-16} 4,${-16} 0,${-11}`)
+          .attr('fill', fillColor)
+          .attr('stroke', borderColor)
+          .attr('stroke-width', 0.5);
+
+        // Label text — white on black, Array font
+        badge.append('text')
+          .attr('x', 0)
+          .attr('y', -rectH / 2 - 16 + 5)
+          .attr('text-anchor', 'middle')
+          .attr('font-size', '10px')
+          .attr('font-family', "'Array', 'JetBrains Mono', monospace")
+          .attr('font-weight', '700')
+          .attr('fill', '#fff')
+          .text(truncLabel);
+      });
+
+    // Save to sessionStorage
+    annotations[paperId] = { label, color };
+    this._saveAnnotations(graphId, annotations);
+  }
+
+  /**
+   * Remove an annotation badge from a node.
+   */
+  removeAnnotation(paperId) {
+    if (!this.nodeElements) return;
+    this.nodeElements
+      .filter(d => d.id === paperId)
+      .selectAll('.annotation-badge')
+      .remove();
+
+    // Remove from sessionStorage
+    const graphId = this.metadata?.graph_id || 'default';
+    const annotations = this._loadAnnotations(graphId);
+    delete annotations[paperId];
+    this._saveAnnotations(graphId, annotations);
+  }
+
+  /**
+   * Get all current annotations.
+   */
+  getAnnotations() {
+    const graphId = this.metadata?.graph_id || 'default';
+    return this._loadAnnotations(graphId);
+  }
+
+  /**
+   * Restore annotations from sessionStorage after graph render.
+   */
+  restoreAnnotations() {
+    const graphId = this.metadata?.graph_id || 'default';
+    const annotations = this._loadAnnotations(graphId);
+    const count = Object.keys(annotations).length;
+    const hasNodes = !!this.nodeElements;
+    console.log(`[Annotations] Restoring: graphId=${graphId}, count=${count}, hasNodeElements=${hasNodes}`);
+    if (!count) return;
+    for (const [paperId, { label, color }] of Object.entries(annotations)) {
+      console.log(`[Annotations] Restoring: ${paperId.substring(0,12)}... label="${label}"`);
+      this.addAnnotation(paperId, label, color);
+    }
+  }
+
+  _loadAnnotations(graphId) {
+    try {
+      return JSON.parse(sessionStorage.getItem(`athena_annotations_${graphId}`) || '{}');
+    } catch { return {}; }
+  }
+
+  _saveAnnotations(graphId, annotations) {
+    try {
+      sessionStorage.setItem(`athena_annotations_${graphId}`, JSON.stringify(annotations));
+    } catch {}
   }
 }
 

@@ -51,3 +51,17 @@ PATHFINDER_FIX_PLAN.md
 # Raw researcher sprite source images
 researcher_images/
 .claude/
+
+# One-off scaffolding / file-generation scripts (dev only, not runtime)
+write_batch_*.py
+write_feature*.py
+write_features*.py
+build_athena_claude_v2.py
+verify_structure*.py
+
+# Backup / temp markdown
+*.md.bak
+
+# Dev screenshots (not needed in repo)
+screenshots_phase_b/
+screenshots/

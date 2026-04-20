@@ -157,7 +157,9 @@ class ArivuTerminalParser {
 
   _parseScript(tokens, raw) {
     if (!tokens.length) return { command: null, args: {}, raw, error: 'Usage: script save|list|info|delete|copy|run "<name>"' };
-    const sub = tokens[0].toLowerCase();
+
+    // Handle bracket syntax: script append("name",5) → sub='append', bracketStr='("name",5)'
+    const { sub, bracketStr } = this._splitBracketSub(tokens[0]);
     const rest = tokens.slice(1);
 
     switch (sub) {
@@ -306,10 +308,58 @@ class ArivuTerminalParser {
     return { args: args.map(a => a.replace(/^["']|["']$/g, '')), error: null };
   }
 
+  /**
+   * Split a subcommand token that may contain bracket args.
+   * e.g. 'load("test",replace)' → { sub: 'load', bracketStr: '("test",replace)' }
+   * e.g. 'save' → { sub: 'save', bracketStr: null }
+   */
+  _splitBracketSub(token) {
+    const parenIdx = token.indexOf('(');
+    if (parenIdx === -1) return { sub: token.toLowerCase(), bracketStr: null };
+    return {
+      sub: token.substring(0, parenIdx).toLowerCase(),
+      bracketStr: token.substring(parenIdx) + '', // includes the (
+    };
+  }
+
+  /**
+   * Parse bracket args from a combined token like '("test",replace)'
+   * or from remaining tokens like ['("test",', 'replace)']
+   */
+  _parseBracketContent(bracketStr, restTokens) {
+    // Combine bracketStr with any remaining tokens (in case spaces inside brackets)
+    let full = bracketStr || '';
+    if (restTokens?.length) full += ' ' + restTokens.join(' ');
+    full = full.trim();
+
+    // Match (...)
+    const match = full.match(/^\((.+)\)$/);
+    if (!match) return { args: null, error: 'Expected (...). Check syntax.' };
+
+    // Split by comma, respecting quotes
+    const inner = match[1];
+    const args = [];
+    let current = '';
+    let inQuote = false;
+    let quoteChar = '';
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if ((ch === '"' || ch === "'") && !inQuote) { inQuote = true; quoteChar = ch; current += ch; }
+      else if (ch === quoteChar && inQuote) { inQuote = false; current += ch; }
+      else if (ch === ',' && !inQuote) { args.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+    if (current.trim()) args.push(current.trim());
+
+    return { args: args.map(a => a.replace(/^["']|["']$/g, '')), error: null };
+  }
+
   _parseSession(tokens, raw) {
     if (!tokens.length) return { command: null, args: {}, raw, error: 'Usage: session save|load|rename|delete|list|append' };
-    const sub = tokens[0].toLowerCase();
-    const rest = tokens.slice(1);
+
+    // Handle bracket syntax: session load("name",replace) → sub='load', bracketStr='("name",replace)'
+    const { sub, bracketStr } = this._splitBracketSub(tokens[0]);
+    const rest = bracketStr ? tokens.slice(1) : tokens.slice(1); // rest is tokens after the subcommand
 
     switch (sub) {
       case 'save': {
@@ -319,15 +369,14 @@ class ArivuTerminalParser {
       }
       case 'load': {
         // session load("name") or session load("name", replace|continue)
-        const bracketResult = this._extractBracketArgs(rest);
-        if (bracketResult.error) {
-          // Maybe they used space syntax: session load "name"
-          const name = rest.join(' ').replace(/^["']|["']$/g, '');
-          if (name) return { command: 'session_load', args: { name, mode: 'new' }, error: null, raw };
+        const loadBracket = bracketStr
+          ? this._parseBracketContent(bracketStr, rest)
+          : this._parseBracketContent(rest.join(' '), []);
+        if (loadBracket.error || !loadBracket.args?.length) {
           return { command: null, args: {}, raw, error: 'Usage: session load("<name>") or session load("<name>", replace|continue)' };
         }
-        const name = bracketResult.args[0];
-        const mode = bracketResult.args[1]?.toLowerCase() || 'new';
+        const name = loadBracket.args[0];
+        const mode = loadBracket.args[1]?.toLowerCase() || 'new';
         if (!name) return { command: null, args: {}, raw, error: 'Missing session name' };
         if (mode && !['new', 'replace', 'continue'].includes(mode)) {
           return { command: null, args: {}, raw, error: `Invalid mode: '${mode}'. Must be replace or continue.` };
@@ -350,9 +399,11 @@ class ArivuTerminalParser {
       case 'list': return { command: 'session_list', args: {}, error: null, raw };
       case 'append': {
         // session append("name", all|N|[N-M])
-        const bracketResult = this._extractBracketArgs(rest);
-        if (bracketResult.error) return { command: null, args: {}, raw, error: bracketResult.error };
-        const bArgs = bracketResult.args;
+        const appendBracket = bracketStr
+          ? this._parseBracketContent(bracketStr, rest)
+          : this._parseBracketContent(rest.join(' '), []);
+        if (appendBracket.error) return { command: null, args: {}, raw, error: 'Usage: session append("<name>", all|N|[N-M])' };
+        const bArgs = appendBracket.args;
         if (!bArgs.length || !bArgs[0]) return { command: null, args: {}, raw, error: 'Usage: session append("<name>", all|N|[N-M])' };
 
         const targetName = bArgs[0];

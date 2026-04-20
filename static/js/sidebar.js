@@ -226,6 +226,16 @@ document.addEventListener('DOMContentLoaded', () => {
           edges: window._arivuGraph.allEdges,
           metadata: window._arivuGraph.metadata
         });
+        // Phase C #012: Restore annotations on tree layout after creation
+        if (window._treeLayout?.addAnnotation) {
+          const graphId = window._arivuGraph?.metadata?.graph_id || 'default';
+          try {
+            const annotations = JSON.parse(sessionStorage.getItem(`athena_annotations_${graphId}`) || '{}');
+            for (const [paperId, ann] of Object.entries(annotations)) {
+              window._treeLayout.addAnnotation(paperId, ann.label, ann.color);
+            }
+          } catch (e) {}
+        }
       }
       const treeSvg = container.querySelector('.tree-svg');
       if (treeSvg) treeSvg.style.display = '';
@@ -312,5 +322,32 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       window._treeLayout.applyFilter(treeFilterMap[filterType] || 'most-relevant');
     }
+
+    // Phase C #107: Dispatch filter awareness event for Athena
+    const filterLabels = {
+      'relevant': null,
+      'cited-desc': 'Most Cited',
+      'cited-asc': 'Least Cited',
+      'impact': 'Highest Impact',
+      'bottlenecks': 'Bottlenecks Only',
+      'contradictions': 'Contradictions',
+      'decade': 'By Decade',
+    };
+    const totalNodes = graph?.allNodes?.length || 0;
+    const activeFilter = filterLabels[filterType] || null;
+    document.dispatchEvent(new CustomEvent('athena:graph:filter', {
+      detail: {
+        active_filters: {
+          field: null,
+          year_range: null,
+          cluster: null,
+          mutation_type: filterType === 'contradictions' ? 'contradiction' : null,
+          display_filter: activeFilter,
+        },
+        visible_count: activeFilter ? Math.floor(totalNodes * 0.2) : totalNodes,
+        hidden_count: activeFilter ? Math.floor(totalNodes * 0.8) : 0,
+        filter_type: filterType,
+      }
+    }));
   }
 });

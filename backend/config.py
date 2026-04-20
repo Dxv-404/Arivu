@@ -139,6 +139,16 @@ class Config:
     API_BASE_URL           = os.environ.get("API_BASE_URL", "https://arivu.app")
     MAX_UPLOAD_MB          = int(os.environ.get("MAX_UPLOAD_MB", "10"))
 
+    # ── Athena Chat System ──────────────────────────────────────
+    # Per ATHENA_CLAUDE.md Part 11 and ATHENA_PHASE_A.md Section 2.1.13
+    GEMINI_API_KEY      = os.environ.get("GEMINI_API_KEY", "")
+    GEMINI_MODEL        = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    ATHENA_ENABLED      = os.environ.get("ATHENA_ENABLED", "true").lower() == "true"
+    ATHENA_GEMINI_QC    = os.environ.get("ATHENA_GEMINI_QUALITY_CHECK", "true").lower() == "true"
+    ATHENA_PREFETCH     = os.environ.get("ATHENA_PREFETCH_ENABLED", "true").lower() == "true"
+    ATHENA_MAX_TOKENS   = int(os.environ.get("ATHENA_MAX_CONTEXT_TOKENS", "6200"))
+    ATHENA_BATCH_SIZE   = int(os.environ.get("ATHENA_STREAM_BATCH_SIZE", "5"))
+
     # ── Phase 8 — Retraction Watch, PubPeer, Live Mode ─────────
     RETRACTION_WATCH_CSV_URL = os.environ.get("RETRACTION_WATCH_CSV_URL", "")
     LIVE_MODE_ENABLED        = os.environ.get("LIVE_MODE_ENABLED", "false").lower() == "true"
@@ -165,6 +175,11 @@ class Config:
     def email_enabled(cls) -> bool:
         """Always call as Config.email_enabled() — lowercase to prevent bare truthy bug."""
         return bool(cls.RESEND_API_KEY)
+
+    @classmethod
+    def gemini_enabled(cls) -> bool:
+        """Always call as Config.gemini_enabled() — matches stripe_enabled()/email_enabled() pattern."""
+        return bool(cls.GEMINI_API_KEY)
 
     @classmethod
     def validate(cls) -> None:
