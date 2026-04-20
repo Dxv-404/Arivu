@@ -44,9 +44,20 @@ flask_test.log
 server.log
 *.log
 
-# Internal planning/spec files
+# Internal planning/spec files (keep local, never push — may contain secrets)
 PATHFINDER.md
 PATHFINDER_FIX_PLAN.md
+ATHENA_*.md
+SCRIPT_SYSTEM_TEST_PLAN.md
+TERMINAL_BUILD_PLAN.md
+ARIVU_TERMINAL_SPEC.md
+
+# Athena test harness (dev only, not runtime)
+scripts/athena_*test*.py
+scripts/athena_prompt_test.py
+scripts/athena_stable_test.py
+scripts/athena_graph_prompt_test.py
+templates/athena_test.html
 
 # Raw researcher sprite source images
 researcher_images/
